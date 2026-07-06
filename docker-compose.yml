@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gestao_ativos_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: gestao_ativos
+    ports:
+      - "5433:5432"
+    volumes:
+      - gestao_ativos_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  gestao_ativos_postgres_data:

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node \"C:/Users/suporte/AppData/Local/Temp/claude/c--xampp-htdocs-gestao-ativos/977272c4-278e-4d35-b1ce-13a0d8bb7d2b/scratchpad/check-nativebutton-fix.mjs\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3010/login)",
+      "Bash(node custody-photo-signature-e2e.mjs)",
+      "Bash(node scripts-tmp-check-token.mjs)"
+    ]
+  }
+}

@@ -1,0 +1,869 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Tenant
+// ---------------------------------------------------------------------------
+
+model Company {
+  id        String   @id @default(cuid())
+  name      String
+  document  String?
+  // Celular de contato da empresa, no padrão brasileiro (ex.: "(11)
+  // 98765-4321") — preenchido opcionalmente no registro público
+  // (app/register). Armazenado já formatado (mesma máscara exibida no
+  // formulário); não há normalização/dígitos-puros porque o telefone não é
+  // usado em busca/filtro em nenhum lugar do app.
+  phone     String?
+  // Config da Evolution API (WhatsApp) desta empresa — usada para enviar o
+  // termo de responsabilidade por WhatsApp na entrega (ver
+  // lib/evolution-api.ts). Por empresa, não global: cada tenant conecta sua
+  // própria instância/número. Todos opcionais porque o envio por WhatsApp é
+  // um recurso opcional (a entrega funciona normalmente sem isso).
+  whatsappApiUrl       String?
+  whatsappApiKey       String?
+  whatsappInstanceName String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  categories      AssetCategory[]
+  manufacturers   Manufacturer[]
+  suppliers       Supplier[]
+  assetStatuses   AssetStatus[]
+  assetConditions AssetCondition[]
+  locationTypes   LocationType[]
+  movementTypes   MovementType[]
+  assets          Asset[]
+  locations       Location[]
+  assetUnits      AssetUnit[]
+  custodies       AssetCustody[]
+  assetMovements  AssetMovement[]
+  stockBalances   StockBalance[]
+  stockMovements  StockMovement[]
+  users           User[]
+  roles           Role[]
+  userRoles       UserRole[]
+  departments     Department[]
+  positions       Position[]
+  employees       Employee[]
+  assetCertifications AssetCertification[]
+  custodyDocuments    CustodyDocument[]
+  custodySignatures   CustodySignature[]
+  custodyPhotos       CustodyPhoto[]
+  custodySignatureRequests CustodySignatureRequest[]
+}
+
+// ---------------------------------------------------------------------------
+// Autenticação (Better Auth) — nomes e campos seguem exatamente o schema
+// que o adapter Prisma do Better Auth espera (ver docs/auth-rbac.md).
+// IDs usam @default(cuid()) porque `advanced.database.generateId: false`
+// está setado em lib/auth.ts, delegando a geração de id ao Prisma/Postgres.
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String   @id @default(cuid())
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id])
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sessions  Session[]
+  accounts  Account[]
+  userRoles UserRole[]
+
+  @@index([companyId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+}
+
+// ---------------------------------------------------------------------------
+// RBAC — Role é parametrizável por empresa (mesma lógica de AssetStatus /
+// AssetCondition / etc.); Permission é um catálogo global de capacidades do
+// código. Um usuário pode ter mais de um Role dentro da mesma empresa.
+// ---------------------------------------------------------------------------
+
+model Role {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  name        String
+  description String?
+  // true para os 6 papéis padrão criados pelo seed; ajuda a diferenciar de
+  // roles customizados que a empresa venha a criar no futuro.
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  permissions RolePermission[]
+  userRoles   UserRole[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+
+  roles RolePermission[]
+}
+
+model RolePermission {
+  id           String     @id @default(cuid())
+  roleId       String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+}
+
+// Atribuição de um Role a um User dentro de uma Company específica.
+model UserRole {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  roleId    String
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, roleId])
+  @@index([companyId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Cadastros de apoio
+// ---------------------------------------------------------------------------
+
+model AssetCategory {
+  id          String    @id @default(cuid())
+  companyId   String
+  company     Company   @relation(fields: [companyId], references: [id])
+  name        String
+  description String?
+  color       String?
+  icon        String?
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  assets Asset[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+}
+
+model Manufacturer {
+  id        String    @id @default(cuid())
+  companyId String
+  company   Company   @relation(fields: [companyId], references: [id])
+  name      String
+  document  String?
+  website   String?
+  email     String?
+  phone     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  assets Asset[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+}
+
+model Supplier {
+  id                    String   @id @default(cuid())
+  companyId             String
+  company               Company  @relation(fields: [companyId], references: [id])
+  corporateName         String
+  tradeName             String?
+  document              String?
+  stateRegistration     String?
+  municipalRegistration String?
+  email                 String?
+  phone                 String?
+  contactName           String?
+  address               String?
+  city                  String?
+  state                 String?
+  zipCode               String?
+  notes                 String?
+  active                Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  assets Asset[]
+
+  @@unique([companyId, corporateName])
+  @@index([companyId])
+}
+
+// Parametrizável por empresa (não usar Enum fixa, conforme regra de negócio).
+model AssetStatus {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  name        String
+  description String?
+  color       String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  assetUnits AssetUnit[]
+  assets     Asset[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+}
+
+// Parametrizável por empresa (não usar Enum fixa, conforme regra de negócio).
+model AssetCondition {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  name        String
+  description String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  assetUnits AssetUnit[]
+  assets     Asset[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+}
+
+// Parametrizável por empresa; substitui a lista fixa sugerida
+// (WAREHOUSE, EMPLOYEE, BRANCH, VEHICLE, SUPPLIER, CUSTOMER,
+// CONSTRUCTION_SITE, SERVICE_CENTER, SCRAP).
+model LocationType {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  locations Location[]
+
+  @@index([companyId])
+}
+
+// Parametrizável por empresa; compartilhado entre AssetMovement e
+// StockMovement (ENTRY, EXIT, ASSIGNMENT, RETURN, TRANSFER, RESERVATION,
+// INVENTORY, ADJUSTMENT, LOSS, THEFT, DISPOSAL, MAINTENANCE_OUT,
+// MAINTENANCE_IN, CALIBRATION, INSPECTION são os tipos oficiais sugeridos).
+model MovementType {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assetMovements AssetMovement[]
+  stockMovements StockMovement[]
+
+  @@index([companyId])
+}
+
+enum TrackingMode {
+  INDIVIDUAL
+  CONSUMABLE
+}
+
+// ---------------------------------------------------------------------------
+// Cadastro mestre
+// ---------------------------------------------------------------------------
+
+model Asset {
+  id               String    @id @default(cuid())
+  companyId        String
+  company          Company   @relation(fields: [companyId], references: [id])
+  assetCode        String
+  name             String
+  description      String?
+  categoryId       String
+  category         AssetCategory @relation(fields: [categoryId], references: [id])
+  manufacturerId   String?
+  manufacturer     Manufacturer? @relation(fields: [manufacturerId], references: [id])
+  supplierId       String?
+  supplier         Supplier? @relation(fields: [supplierId], references: [id])
+  statusId         String
+  status           AssetStatus @relation(fields: [statusId], references: [id])
+  conditionId      String
+  condition        AssetCondition @relation(fields: [conditionId], references: [id])
+  trackingMode     TrackingMode
+  barcode          String?
+  defaultUnit      String?
+  photo            String?
+  minimumStock     Decimal?  @db.Decimal(14, 3)
+  maximumStock     Decimal?  @db.Decimal(14, 3)
+  reorderPoint     Decimal?  @db.Decimal(14, 3)
+  purchasePrice    Decimal?  @db.Decimal(14, 2)
+  replacementCost  Decimal?  @db.Decimal(14, 2)
+  expectedLifetime Int?
+  warrantyMonths   Int?
+  active           Boolean   @default(true)
+  // Identificador público e opaco usado por /q/[token] e GET /api/qr/[token]
+  // para rastreabilidade via QR Code — nunca o `id` (cuid) interno. Nulo até
+  // alguém gerar o QR pela primeira vez (ver lib/qr-code.ts); a partir daí é
+  // estável (reimprimir a mesma etiqueta física continua funcionando).
+  qrCodeToken      String?   @unique
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+
+  assetUnits     AssetUnit[]
+  assetMovements AssetMovement[]
+  stockBalances  StockBalance[]
+  stockMovements StockMovement[]
+  certifications AssetCertification[]
+  custodies      AssetCustody[]
+
+  @@unique([companyId, assetCode])
+  @@index([companyId])
+  @@index([categoryId])
+  @@index([manufacturerId])
+  @@index([supplierId])
+  @@index([statusId])
+  @@index([conditionId])
+}
+
+// ---------------------------------------------------------------------------
+// Certificações de ativos (CA, INMETRO, ANATEL, ISO, OUTROS).
+//
+// `certificationType` e `status` são enum (não tabela parametrizável por
+// empresa como AssetStatus/AssetCondition) porque representam classificações
+// regulatórias externas — quem evolui essa lista é a plataforma via
+// migration, não cada empresa. Um Asset pode ter zero, uma ou várias
+// certificações (histórico de CA antigo/vencido + CA vigente, por exemplo).
+//
+// Campos específicos de cada tipo (ex.: fabricante homologado, tipo de
+// proteção e norma aplicável, no caso de CA) ficam em `metadata` (JSON) em
+// vez de colunas dedicadas — mantém a tabela genérica para os próximos
+// tipos, sem migration a cada novo tipo de certificação. Ver
+// docs/certifications.md para o formato esperado de `metadata` por tipo e
+// para a arquitetura de integração externa (CertificationProvider).
+// ---------------------------------------------------------------------------
+
+enum CertificationType {
+  CA
+  INMETRO
+  ANATEL
+  ISO
+  OUTROS
+}
+
+enum CertificationStatus {
+  VALID
+  EXPIRED
+  SUSPENDED
+  CANCELLED
+  PENDING
+}
+
+model AssetCertification {
+  id                  String              @id @default(cuid())
+  companyId           String
+  company             Company             @relation(fields: [companyId], references: [id])
+  assetId             String
+  asset               Asset               @relation(fields: [assetId], references: [id])
+  certificationType   CertificationType
+  certificationNumber String
+  issueDate           DateTime?
+  expirationDate      DateTime?
+  status              CertificationStatus @default(VALID)
+  issuer              String?
+  documentUrl         String?
+  // Id do registro no sistema externo de origem (ex.: API do provedor de
+  // CA), para permitir sincronização/atualização futura sem duplicar.
+  externalId          String?
+  // Último momento em que os dados foram confirmados/atualizados por um
+  // CertificationProvider externo. Nulo quando o registro foi criado/editado
+  // manualmente e nunca sincronizado.
+  lastSyncAt          DateTime?
+  // Dados específicos do tipo de certificação que não fazem sentido como
+  // coluna genérica (ex., para CA: fabricante homologado, descrição
+  // oficial, tipo de proteção, norma aplicável).
+  metadata            Json?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  @@unique([companyId, certificationType, certificationNumber])
+  @@index([companyId])
+  @@index([assetId])
+  @@index([expirationDate])
+}
+
+// ---------------------------------------------------------------------------
+// Localização (qualquer lugar onde um ativo pode permanecer)
+// ---------------------------------------------------------------------------
+
+model Location {
+  id             String       @id @default(cuid())
+  companyId      String
+  company        Company      @relation(fields: [companyId], references: [id])
+  locationTypeId String
+  locationType   LocationType @relation(fields: [locationTypeId], references: [id])
+  // Aponta para o id da entidade referenciada (Employee, Vehicle, Branch,
+  // Supplier, Customer, etc.) conforme o locationType. Sem FK de banco
+  // porque o alvo varia por tipo — invariante garantido pela aplicação.
+  referenceId    String?
+  name           String
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  currentAssetUnits          AssetUnit[]     @relation("AssetUnitCurrentLocation")
+  custodies                  AssetCustody[]
+  stockBalances              StockBalance[]
+  movementsOrigin            AssetMovement[] @relation("AssetMovementOrigin")
+  movementsDestination       AssetMovement[] @relation("AssetMovementDestination")
+  stockMovementsOrigin       StockMovement[] @relation("StockMovementOrigin")
+  stockMovementsDestination  StockMovement[] @relation("StockMovementDestination")
+
+  @@index([companyId])
+}
+
+// ---------------------------------------------------------------------------
+// Unidade física individual (trackingMode = INDIVIDUAL)
+// ---------------------------------------------------------------------------
+
+model AssetUnit {
+  id                 String         @id @default(cuid())
+  companyId          String
+  company            Company        @relation(fields: [companyId], references: [id])
+  assetId            String
+  asset              Asset          @relation(fields: [assetId], references: [id])
+  patrimonyNumber    String?
+  serialNumber       String?
+  qrCode             String?
+  barcode            String?
+  manufactureDate    DateTime?
+  purchaseDate       DateTime?
+  purchaseValue      Decimal?       @db.Decimal(14, 2)
+  currentValue       Decimal?       @db.Decimal(14, 2)
+  warrantyExpiration DateTime?
+  statusId           String
+  status             AssetStatus    @relation(fields: [statusId], references: [id])
+  conditionId        String
+  condition          AssetCondition @relation(fields: [conditionId], references: [id])
+  currentLocationId  String?
+  currentLocation    Location?      @relation("AssetUnitCurrentLocation", fields: [currentLocationId], references: [id])
+  // Ponteiro para a custódia ativa (1-1). O histórico completo fica em
+  // `custodies`, nunca é sobrescrito.
+  currentCustodyId   String?        @unique
+  currentCustody     AssetCustody?  @relation("AssetUnitCurrentCustody", fields: [currentCustodyId], references: [id])
+  notes              String?
+  active             Boolean        @default(true)
+  // Distinto do `qrCode` acima (campo livre do cadastro original, preenchido
+  // manualmente): `qrCodeToken` é o identificador público opaco gerado pela
+  // aplicação para /q/[token] — ver comentário equivalente em Asset.
+  qrCodeToken        String?        @unique
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  deletedAt          DateTime?
+
+  movements AssetMovement[]
+  custodies AssetCustody[]  @relation("AssetUnitCustodyHistory")
+
+  @@unique([companyId, patrimonyNumber])
+  @@unique([companyId, serialNumber])
+  @@index([companyId])
+  @@index([assetId])
+}
+
+enum CustodyStatus {
+  ACTIVE
+  RETURNED
+}
+
+// ---------------------------------------------------------------------------
+// Custódia (responsabilidade de um colaborador sobre um ativo — patrimoniado
+// ou consumível). `assetId` é sempre obrigatório (inclusive quando há
+// AssetUnit, é denormalizado dali) porque custódias de consumível não têm
+// unidade nenhuma; `assetUnitId` só é preenchido para trackingMode
+// INDIVIDUAL. "Atrasado" não é um status persistido: é derivado em
+// lib/custodies.ts (status ACTIVE + expectedReturnAt no passado), mesmo
+// critério usado para o badge de CA em lib/certifications/badge.ts.
+// ---------------------------------------------------------------------------
+
+model AssetCustody {
+  id               String        @id @default(cuid())
+  companyId        String
+  company          Company       @relation(fields: [companyId], references: [id])
+  employeeId       String
+  employee         Employee      @relation(fields: [employeeId], references: [id])
+  assetId          String
+  asset            Asset         @relation(fields: [assetId], references: [id])
+  assetUnitId      String?
+  assetUnit        AssetUnit?    @relation("AssetUnitCustodyHistory", fields: [assetUnitId], references: [id])
+  holderLocationId String
+  holderLocation   Location      @relation(fields: [holderLocationId], references: [id])
+  quantity         Decimal       @db.Decimal(14, 3)
+  status           CustodyStatus @default(ACTIVE)
+  deliveredAt      DateTime
+  expectedReturnAt DateTime?
+  returnedAt       DateTime?
+  reason           String?
+  notes            String?
+  createdBy        String?
+  // Identificador público opaco para /q/[token] (ver comentário em Asset) —
+  // permite que o QR fixado num item entregue leve direto ao status da
+  // custódia e do termo/assinatura (requisito de rastreabilidade).
+  qrCodeToken      String?       @unique
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  currentForAssetUnit AssetUnit?      @relation("AssetUnitCurrentCustody")
+  movements           AssetMovement[]
+  documents           CustodyDocument[]
+  signatures          CustodySignature[]
+  photos              CustodyPhoto[]
+  signatureRequests   CustodySignatureRequest[]
+
+  @@index([companyId])
+  @@index([assetUnitId])
+  @@index([employeeId])
+  @@index([assetId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Documentos e assinatura digital de custódia — evidência formal da
+// entrega/devolução. `type` é enum (não tabela parametrizável): o conteúdo e
+// o momento em que cada termo pode ser gerado são regras da própria
+// plataforma (DELIVERY_TERM a qualquer momento; RETURN_TERM só após a
+// custódia ser devolvida — ver lib/custodies/index.ts), não uma customização
+// por empresa. `pdfUrl` fica preparado para uma etapa futura de geração de
+// PDF (não implementada agora); o termo hoje só existe como HTML.
+// ---------------------------------------------------------------------------
+
+enum CustodyDocumentType {
+  DELIVERY_TERM
+  RETURN_TERM
+}
+
+model CustodyDocument {
+  id          String              @id @default(cuid())
+  companyId   String
+  company     Company             @relation(fields: [companyId], references: [id])
+  custodyId   String
+  custody     AssetCustody        @relation(fields: [custodyId], references: [id])
+  type        CustodyDocumentType
+  contentHtml String
+  pdfUrl      String?
+  generatedAt DateTime
+  createdAt   DateTime            @default(now())
+
+  signatures        CustodySignature[]
+  signatureRequests CustodySignatureRequest[]
+
+  @@index([companyId])
+  @@index([custodyId])
+}
+
+enum SignatureRequestStatus {
+  PENDING
+  SENT
+  SIGNED
+}
+
+// Solicitação de assinatura remota do termo de entrega via WhatsApp (ver
+// lib/evolution-api.ts e app/assinar/[token]) — alternativa à assinatura
+// presencial (CustodySignature capturada direto no formulário de entrega).
+// `token` é opaco e de uso único, gerado com o mesmo `generateQrToken()` do
+// fluxo de QR Code, mas enviado privadamente ao WhatsApp de uma pessoa
+// específica (não impresso/exposto como o QR) — por isso a rota pública
+// pode expor o `contentHtml` do termo sem restrição adicional.
+model CustodySignatureRequest {
+  id         String                 @id @default(cuid())
+  companyId  String
+  company    Company                @relation(fields: [companyId], references: [id])
+  custodyId  String
+  custody    AssetCustody           @relation(fields: [custodyId], references: [id])
+  documentId String
+  document   CustodyDocument        @relation(fields: [documentId], references: [id])
+  token      String                 @unique
+  // Nulo quando a solicitação é presencial (QR Code lido na hora, sem envio
+  // por WhatsApp) — ver app/(app)/custodies/deliver-form.tsx.
+  phone      String?
+  status     SignatureRequestStatus @default(PENDING)
+  sentAt     DateTime?
+  signedAt   DateTime?
+  createdAt  DateTime               @default(now())
+
+  @@index([companyId])
+  @@index([custodyId])
+}
+
+// Uma assinatura sempre referencia o CustodyDocument que foi assinado;
+// `custodyId` é denormalizado do documento para permitir consultar todas as
+// assinaturas de uma custódia sem precisar passar pela tabela de documentos.
+// `signatureImageUrl`/`signatureData` são ambos opcionais no schema, mas a
+// aplicação exige pelo menos um dos dois (ver
+// lib/validations/custody-document.ts) — `signatureData` é o normal hoje
+// (data URL base64 capturado do canvas de assinatura), `signatureImageUrl`
+// fica preparado para quando houver upload de uma imagem já pronta.
+model CustodySignature {
+  id                String          @id @default(cuid())
+  companyId         String
+  company           Company         @relation(fields: [companyId], references: [id])
+  custodyId         String
+  custody           AssetCustody    @relation(fields: [custodyId], references: [id])
+  documentId        String
+  document          CustodyDocument @relation(fields: [documentId], references: [id])
+  signerName        String
+  signerDocument    String
+  signatureImageUrl String?
+  signatureData     String?
+  signedAt          DateTime
+  ipAddress         String?
+  userAgent         String?
+  createdAt         DateTime        @default(now())
+
+  @@index([companyId])
+  @@index([custodyId])
+  @@index([documentId])
+}
+
+enum CustodyPhotoKind {
+  DELIVERY
+  RETURN
+}
+
+// Fotos do item no momento da entrega e/ou devolução (até 5 por evento,
+// limite aplicado na validação — ver lib/validations/custody.ts). Mesmo
+// padrão de CustodySignature.signatureData: guarda a imagem como data URL
+// base64 direto no banco (`dataUrl`), sem depender de storage externo —
+// o client já comprime/redimensiona antes de enviar (ver
+// components/custody/photo-picker.tsx) para manter cada imagem pequena.
+model CustodyPhoto {
+  id        String           @id @default(cuid())
+  companyId String
+  company   Company          @relation(fields: [companyId], references: [id])
+  custodyId String
+  custody   AssetCustody     @relation(fields: [custodyId], references: [id])
+  kind      CustodyPhotoKind
+  dataUrl   String
+  createdAt DateTime         @default(now())
+
+  @@index([companyId])
+  @@index([custodyId])
+}
+
+// ---------------------------------------------------------------------------
+// Movimentação de AssetUnit (trackingMode = INDIVIDUAL). Imutável: nunca
+// editar, nunca excluir.
+// ---------------------------------------------------------------------------
+
+model AssetMovement {
+  id                    String        @id @default(cuid())
+  companyId             String
+  company               Company       @relation(fields: [companyId], references: [id])
+  assetId               String
+  asset                 Asset         @relation(fields: [assetId], references: [id])
+  assetUnitId           String?
+  assetUnit             AssetUnit?    @relation(fields: [assetUnitId], references: [id])
+  movementTypeId        String
+  movementType          MovementType  @relation(fields: [movementTypeId], references: [id])
+  quantity              Decimal       @db.Decimal(14, 3)
+  originLocationId      String?
+  originLocation        Location?     @relation("AssetMovementOrigin", fields: [originLocationId], references: [id])
+  destinationLocationId String?
+  destinationLocation   Location?     @relation("AssetMovementDestination", fields: [destinationLocationId], references: [id])
+  custodyId             String?
+  custody               AssetCustody? @relation(fields: [custodyId], references: [id])
+  executedBy            String?
+  executedAt             DateTime
+  referenceType         String?
+  referenceId           String?
+  observations           String?
+  createdAt              DateTime     @default(now())
+
+  @@index([companyId])
+  @@index([assetId])
+  @@index([assetUnitId])
+}
+
+// ---------------------------------------------------------------------------
+// Estoque de consumíveis (trackingMode = CONSUMABLE). StockBalance é apenas
+// cache de leitura — nunca editar manualmente, sempre recalcular a partir de
+// StockMovement.
+// ---------------------------------------------------------------------------
+
+model StockBalance {
+  id         String   @id @default(cuid())
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id])
+  assetId    String
+  asset      Asset    @relation(fields: [assetId], references: [id])
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id])
+  quantity   Decimal  @db.Decimal(14, 3)
+  updatedAt  DateTime @updatedAt
+
+  @@unique([assetId, locationId])
+  @@index([companyId])
+}
+
+model StockMovement {
+  id                    String       @id @default(cuid())
+  companyId             String
+  company               Company      @relation(fields: [companyId], references: [id])
+  assetId               String
+  asset                 Asset        @relation(fields: [assetId], references: [id])
+  movementTypeId        String
+  movementType          MovementType @relation(fields: [movementTypeId], references: [id])
+  quantity               Decimal     @db.Decimal(14, 3)
+  originLocationId      String?
+  originLocation        Location?    @relation("StockMovementOrigin", fields: [originLocationId], references: [id])
+  destinationLocationId String?
+  destinationLocation   Location?    @relation("StockMovementDestination", fields: [destinationLocationId], references: [id])
+  executedBy            String?
+  executedAt             DateTime
+  observations           String?
+  createdAt               DateTime   @default(now())
+
+  @@index([companyId])
+  @@index([assetId])
+}
+
+// ---------------------------------------------------------------------------
+// Colaboradores — cadastros de apoio (Department, Position) parametrizáveis
+// por empresa, seguindo o mesmo padrão de AssetCategory/Manufacturer.
+// ---------------------------------------------------------------------------
+
+model Department {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employees Employee[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+}
+
+model Position {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employees Employee[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model Employee {
+  id           String         @id @default(cuid())
+  companyId    String
+  company      Company        @relation(fields: [companyId], references: [id])
+  name         String
+  document     String
+  email        String?
+  phone        String?
+  registration String?
+  departmentId String?
+  department   Department?    @relation(fields: [departmentId], references: [id])
+  positionId   String?
+  position     Position?      @relation(fields: [positionId], references: [id])
+  // "Excluir" na UI é soft delete: marca INACTIVE, nunca remove a linha —
+  // preserva histórico caso movimentações/custódias venham a referenciar o
+  // colaborador no futuro.
+  status       EmployeeStatus @default(ACTIVE)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  custodies AssetCustody[]
+
+  @@unique([companyId, document])
+  @@index([companyId])
+  @@index([departmentId])
+  @@index([positionId])
+}
