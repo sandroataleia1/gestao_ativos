@@ -6,7 +6,7 @@ import { getCurrentCompany, hasPermission, requireAuthOrDeny } from "@/lib/auth-
 import { PERMISSIONS, PERMISSION_DESCRIPTIONS, type PermissionKey } from "@/lib/permissions";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { WhatsappConfigForm } from "./whatsapp-config-form";
+import { WhatsappConnectPanel } from "./whatsapp-connect-panel";
 
 export const metadata: Metadata = {
   title: "Configurações — Gestão de Ativos",
@@ -131,17 +131,7 @@ export default async function SettingsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="mb-4 text-sm text-muted-foreground">
-              Usada para enviar o termo de responsabilidade por WhatsApp na entrega de ativos, quando o
-              colaborador não assina presencialmente.
-            </p>
-            <WhatsappConfigForm
-              initialValues={{
-                whatsappApiUrl: company?.whatsappApiUrl ?? "",
-                whatsappApiKey: company?.whatsappApiKey ?? "",
-                whatsappInstanceName: company?.whatsappInstanceName ?? "",
-              }}
-            />
+            <WhatsappConnectPanel initialHasInstance={Boolean(company?.whatsappInstanceName)} />
           </CardContent>
         </Card>
       ) : null}
