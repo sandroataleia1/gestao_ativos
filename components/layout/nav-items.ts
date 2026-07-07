@@ -9,6 +9,7 @@ import {
   SettingsIcon,
   TagIcon,
   TruckIcon,
+  UploadIcon,
   UsersIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -48,6 +49,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Gestão",
     items: [
       { label: "Relatórios", href: "/reports", icon: BarChart3Icon },
+      { label: "Importações", href: "/imports", icon: UploadIcon },
       { label: "Configurações", href: "/configuracoes", icon: SettingsIcon },
     ],
   },

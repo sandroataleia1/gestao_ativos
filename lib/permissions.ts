@@ -25,6 +25,8 @@ export const PERMISSIONS = {
   EMPLOYEE_MANAGE: "employee:manage",
   REPORT_VIEW: "report:view",
   ALERT_VIEW: "alert:view",
+  IMPORT_VIEW: "import:view",
+  IMPORT_MANAGE: "import:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -51,6 +53,8 @@ export const PERMISSION_DESCRIPTIONS: Record<PermissionKey, string> = {
   [PERMISSIONS.EMPLOYEE_MANAGE]: "Criar/editar/inativar colaboradores",
   [PERMISSIONS.REPORT_VIEW]: "Visualizar relatórios gerenciais e exportar dados",
   [PERMISSIONS.ALERT_VIEW]: "Visualizar central de alertas (CA, custódia, estoque)",
+  [PERMISSIONS.IMPORT_VIEW]: "Visualizar tela de importação em lote",
+  [PERMISSIONS.IMPORT_MANAGE]: "Importar colaboradores, ativos e estoque em lote via Excel",
 };
 
 export const SYSTEM_ROLES = {
@@ -93,7 +97,15 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRole, PermissionKey[]> = {
     PERMISSIONS.EMPLOYEE_VIEW,
     PERMISSIONS.REPORT_VIEW,
     PERMISSIONS.ALERT_VIEW,
+    PERMISSIONS.IMPORT_VIEW,
   ],
+  // RH/ALMOXARIFADO/TECNICO_SST ganham import:view + import:manage "cheio"
+  // (não há permissão por tipo de importação — ver docs/imports.md). As
+  // anotações da matriz de import (RH ~ colaboradores; TECNICO_SST ~ ativos
+  // e estoque) descrevem o uso esperado de cada papel, não uma trava
+  // técnica: checar isso exigiria olhar o nome do papel, o que quebraria a
+  // abstração de RBAC deste sistema (papéis são dados por empresa, não
+  // hardcoded).
   RH: [
     PERMISSIONS.ASSET_VIEW,
     PERMISSIONS.ASSET_UNIT_VIEW,
@@ -104,6 +116,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRole, PermissionKey[]> = {
     PERMISSIONS.EMPLOYEE_MANAGE,
     PERMISSIONS.REPORT_VIEW,
     PERMISSIONS.ALERT_VIEW,
+    PERMISSIONS.IMPORT_VIEW,
+    PERMISSIONS.IMPORT_MANAGE,
   ],
   ALMOXARIFADO: [
     PERMISSIONS.ASSET_VIEW,
@@ -120,6 +134,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRole, PermissionKey[]> = {
     PERMISSIONS.EMPLOYEE_VIEW,
     PERMISSIONS.REPORT_VIEW,
     PERMISSIONS.ALERT_VIEW,
+    PERMISSIONS.IMPORT_VIEW,
+    PERMISSIONS.IMPORT_MANAGE,
   ],
   TECNICO_SST: [
     PERMISSIONS.ASSET_VIEW,
@@ -133,6 +149,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRole, PermissionKey[]> = {
     PERMISSIONS.EMPLOYEE_VIEW,
     PERMISSIONS.REPORT_VIEW,
     PERMISSIONS.ALERT_VIEW,
+    PERMISSIONS.IMPORT_VIEW,
+    PERMISSIONS.IMPORT_MANAGE,
   ],
   // CONSULTA já tem *_VIEW de todo o domínio ("acesso somente leitura a todo
   // o domínio de ativos") — relatórios e alertas são apenas agregações de
