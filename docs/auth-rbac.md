@@ -226,3 +226,56 @@ npm run db:seed
 ```
 
 `prisma migrate reset` também dispara o seed automaticamente.
+
+## 6. Recuperação de senha
+
+Duas entradas convergem no mesmo fluxo do Better Auth e na mesma página de
+definição de senha:
+
+1. **Self-service** ("esqueci minha senha") — `/esqueci-senha` →
+   `forgot-password-form.tsx` chama `POST /api/auth/request-password-reset`
+   diretamente (endpoint nativo do Better Auth, exposto pelo catch-all
+   `app/api/auth/[...all]/route.ts`).
+2. **Admin-triggered** — um ADMIN em `/configuracoes/usuarios` convida um
+   usuário novo ou pede redefinição de senha para um existente; por trás,
+   chama `generatePasswordResetLink(email)` (`lib/auth.ts`), que também usa
+   `auth.api.requestPasswordReset` internamente, só que devolve o link
+   pronto para o admin copiar/compartilhar manualmente (WhatsApp, etc.), em
+   vez de depender do e-mail.
+
+Ambos os caminhos terminam na mesma página pública
+**`app/redefinir-senha/[token]/page.tsx`** + `reset-password-form.tsx`, que
+chama `POST /api/auth/reset-password` (também nativo do Better Auth) com
+`{token, newPassword}`.
+
+### Envio de e-mail (`lib/mail.ts`)
+
+`emailAndPassword.sendResetPassword` (`lib/auth.ts`) dispara o e-mail de
+verdade via `sendMail` (`lib/mail.ts`, usando `nodemailer` sobre SMTP
+genérico — variáveis `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`/
+`SMTP_FROM`, ver `.env.example`). Sem `SMTP_HOST` configurado, `sendMail` só
+loga um aviso e segue em frente — não quebra o fluxo (útil em dev local sem
+servidor SMTP). Falhas de envio nunca são propagadas: o Better Auth sempre
+responde a mesma mensagem genérica de sucesso, exista ou não o e-mail.
+
+### Propriedades de segurança (já nativas do Better Auth, só configuradas explicitamente)
+
+- **Token opaco e de curta duração**: gerado com `generateId(24)` pelo
+  próprio Better Auth, gravado na tabela `Verification` (que ele já
+  gerencia). `resetPasswordTokenExpiresIn: 60 * 60` (1h, declarado em
+  `lib/auth.ts` em vez de depender do default).
+- **Sem enumeração de e-mail**: `POST /request-password-reset` sempre
+  responde a mesma mensagem (`"Se esse e-mail existir..."`), exista ou não
+  a conta — o próprio Better Auth já simula o trabalho de busca/token
+  mesmo quando o usuário não existe, para igualar o tempo de resposta. A UI
+  (`forgot-password-form.tsx`) replica essa garantia: mostra sempre a mesma
+  mensagem, sem checar o corpo da resposta.
+- **Revogação de sessões antigas**: `revokeSessionsOnPasswordReset: true`
+  (`lib/auth.ts`, default do Better Auth é `false`) — ao redefinir a senha
+  com sucesso, todas as sessões abertas anteriormente são invalidadas.
+- **Rate limiting**: `/request-password-reset` e `/reset-password` já caem
+  na regra nativa estrita do Better Auth (janela 60s/máx. 3 tentativas por
+  IP — ver `getDefaultSpecialRules()` em
+  `node_modules/better-auth/dist/api/rate-limiter/index.mjs`), configurada
+  na sprint de hardening de segurança (`rateLimit.enabled: true` em
+  `lib/auth.ts`).

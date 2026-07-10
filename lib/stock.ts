@@ -154,6 +154,103 @@ export async function getStockRows(companyId: string, filters: StockFilters = {}
   return rows.sort((a, b) => a.asset.name.localeCompare(b.asset.name));
 }
 
+export const STOCK_SORT_FIELDS = ["asset", "code", "category", "location", "trackingMode", "quantity"] as const;
+export type StockSortField = (typeof STOCK_SORT_FIELDS)[number];
+
+function compareStockRows(
+  a: Awaited<ReturnType<typeof getStockRows>>[number],
+  b: Awaited<ReturnType<typeof getStockRows>>[number],
+  sort: StockSortField,
+): number {
+  switch (sort) {
+    case "code":
+      return a.asset.assetCode.localeCompare(b.asset.assetCode);
+    case "category":
+      return a.asset.category.name.localeCompare(b.asset.category.name);
+    case "location":
+      return a.location.name.localeCompare(b.location.name);
+    case "trackingMode":
+      return a.asset.trackingMode.localeCompare(b.asset.trackingMode);
+    case "quantity":
+      return a.quantity - b.quantity;
+    default:
+      return a.asset.name.localeCompare(b.asset.name);
+  }
+}
+
+export type StockPageParams = StockFilters & {
+  page: number;
+  pageSize: number;
+  search?: string;
+  sort?: StockSortField;
+  dir?: "asc" | "desc";
+};
+
+/** `getStockRows` une duas fontes (StockBalance + AssetUnit agrupado) que o
+ * Prisma não consegue paginar como uma única query — ver docs/performance.md
+ * para a limitação estrutural aceita aqui. A busca em si continua trazendo
+ * todas as linhas que batem com o filtro (igual antes), mas agora só as da
+ * página pedida vão para o client — reduz o payload/DOM renderizado, mesmo
+ * sem reduzir a leitura no banco. Como o merge já exige montar o array
+ * inteiro em memória, a busca por texto e a ordenação por qualquer coluna
+ * também são feitas aqui (sem custo adicional de banco) antes de fatiar a
+ * página. Os cards de resumo da tela não dependem mais deste array (usam
+ * aggregate/count separados, ver getStockSummary). */
+export async function getStockRowsPage(companyId: string, params: StockPageParams) {
+  const { page, pageSize, search, sort = "asset", dir = "asc", ...filters } = params;
+  let allRows = await getStockRows(companyId, filters);
+
+  if (search) {
+    const q = search.toLowerCase();
+    allRows = allRows.filter(
+      (row) => row.asset.name.toLowerCase().includes(q) || row.asset.assetCode.toLowerCase().includes(q),
+    );
+  }
+
+  allRows.sort((a, b) => (dir === "desc" ? -1 : 1) * compareStockRows(a, b, sort));
+  const skip = (page - 1) * pageSize;
+  return { rows: allRows.slice(skip, skip + pageSize), total: allRows.length };
+}
+
+/** Totais para os cards de resumo de /stock — usa aggregate/count em vez de
+ * somar sobre o array de linhas carregado (evita depender de
+ * `getStockRows` inteiro só para 4 números). */
+export async function getStockSummary(companyId: string) {
+  const [distinctAssetsBalance, distinctAssetsUnits, distinctLocationsBalance, distinctLocationsUnits, consumableSum, individualCount] =
+    await Promise.all([
+      prisma.stockBalance.findMany({ where: { companyId }, select: { assetId: true }, distinct: ["assetId"] }),
+      prisma.assetUnit.findMany({
+        where: { companyId, active: true, currentLocationId: { not: null } },
+        select: { assetId: true },
+        distinct: ["assetId"],
+      }),
+      prisma.stockBalance.findMany({ where: { companyId }, select: { locationId: true }, distinct: ["locationId"] }),
+      prisma.assetUnit.findMany({
+        where: { companyId, active: true, currentLocationId: { not: null } },
+        select: { currentLocationId: true },
+        distinct: ["currentLocationId"],
+      }),
+      prisma.stockBalance.aggregate({ where: { companyId }, _sum: { quantity: true } }),
+      prisma.assetUnit.count({ where: { companyId, active: true, currentLocationId: { not: null } } }),
+    ]);
+
+  const distinctAssets = new Set([
+    ...distinctAssetsBalance.map((r) => r.assetId),
+    ...distinctAssetsUnits.map((r) => r.assetId),
+  ]).size;
+  const distinctLocations = new Set([
+    ...distinctLocationsBalance.map((r) => r.locationId),
+    ...distinctLocationsUnits.map((r) => r.currentLocationId),
+  ]).size;
+
+  return {
+    distinctAssets,
+    distinctLocations,
+    consumableQuantity: toNumber(consumableSum._sum.quantity ?? 0),
+    individualUnits: individualCount,
+  };
+}
+
 export type StockMovementFilters = {
   assetId?: string;
   movementTypeId?: string;
@@ -167,7 +264,11 @@ export type StockMovementFilters = {
  * uma AssetUnit (itens individuais). Reaproveitado pela API (GET
  * /api/stock/movements) e pela página /stock.
  */
-export async function getStockMovements(companyId: string, filters: StockMovementFilters = {}) {
+export async function getStockMovements(
+  companyId: string,
+  filters: StockMovementFilters = {},
+  limitPerSource = 200,
+) {
   const { assetId, movementTypeId, locationId, dateFrom, dateTo } = filters;
 
   const executedAtFilter =
@@ -205,7 +306,7 @@ export async function getStockMovements(companyId: string, filters: StockMovemen
         destinationLocation: { select: locationSelect },
       },
       orderBy: { executedAt: "desc" },
-      take: 200,
+      take: limitPerSource,
     }),
     prisma.assetMovement.findMany({
       where: {
@@ -224,7 +325,7 @@ export async function getStockMovements(companyId: string, filters: StockMovemen
         destinationLocation: { select: locationSelect },
       },
       orderBy: { executedAt: "desc" },
-      take: 200,
+      take: limitPerSource,
     }),
   ]);
 
@@ -256,4 +357,65 @@ export async function getStockMovements(companyId: string, filters: StockMovemen
   ];
 
   return movements.sort((a, b) => b.executedAt.getTime() - a.executedAt.getTime());
+}
+
+const MAX_MOVEMENTS_MERGE = 1000;
+
+export type StockMovementsPageParams = StockMovementFilters & { page: number; pageSize: number };
+
+/** Paginação sobre a mesma união StockMovement + AssetMovement de
+ * `getStockMovements` — como as duas fontes vêm ordenadas por
+ * `executedAt desc` só é preciso buscar, de cada uma, o suficiente para
+ * cobrir até o fim da página pedida (nunca a tabela inteira), com um teto de
+ * segurança (histórico muito antigo fica fora da paginação normal; use
+ * Relatórios para exportar tudo). */
+export async function getStockMovementsPage(companyId: string, params: StockMovementsPageParams) {
+  const { page, pageSize, ...filters } = params;
+  const skip = (page - 1) * pageSize;
+  const fetchLimit = Math.min(skip + pageSize, MAX_MOVEMENTS_MERGE);
+
+  const [total, movements] = await Promise.all([
+    getStockMovementsCount(companyId, filters),
+    getStockMovements(companyId, filters, fetchLimit),
+  ]);
+
+  return { rows: movements.slice(skip, skip + pageSize), total };
+}
+
+async function getStockMovementsCount(companyId: string, filters: StockMovementFilters) {
+  const { assetId, movementTypeId, locationId, dateFrom, dateTo } = filters;
+  const executedAtFilter =
+    dateFrom || dateTo
+      ? {
+          ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
+          ...(dateTo ? { lte: new Date(dateTo) } : {}),
+        }
+      : undefined;
+  const locationFilter = locationId
+    ? { OR: [{ originLocationId: locationId }, { destinationLocationId: locationId }] }
+    : {};
+
+  const [stockCount, assetCount] = await Promise.all([
+    prisma.stockMovement.count({
+      where: {
+        companyId,
+        ...(assetId ? { assetId } : {}),
+        ...(movementTypeId ? { movementTypeId } : {}),
+        ...(executedAtFilter ? { executedAt: executedAtFilter } : {}),
+        ...locationFilter,
+      },
+    }),
+    prisma.assetMovement.count({
+      where: {
+        companyId,
+        assetUnitId: { not: null },
+        ...(assetId ? { assetId } : {}),
+        ...(movementTypeId ? { movementTypeId } : {}),
+        ...(executedAtFilter ? { executedAt: executedAtFilter } : {}),
+        ...locationFilter,
+      },
+    }),
+  ]);
+
+  return stockCount + assetCount;
 }

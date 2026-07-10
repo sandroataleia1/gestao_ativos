@@ -14,10 +14,11 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { NAV_GROUPS } from "./nav-items";
+import { getActiveNavHref, NAV_GROUPS } from "./nav-items";
 
 export function MobileNav() {
   const pathname = usePathname();
+  const activeHref = getActiveNavHref(pathname);
   const [open, setOpen] = useState(false);
 
   return (
@@ -40,15 +41,16 @@ export function MobileNav() {
                 {group.label}
               </span>
               {group.items.map((item) => {
-                const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                const isActive = item.href === activeHref;
                 const Icon = item.icon;
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
                     onClick={() => setOpen(false)}
+                    aria-current={isActive ? "page" : undefined}
                     className={cn(
-                      "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                      "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
                       isActive && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
                     )}
                   >

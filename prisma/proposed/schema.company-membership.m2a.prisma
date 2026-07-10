@@ -1,0 +1,88 @@
+// ============================================================================
+// PROPOSTA de alteração de schema para a Migration M2A — NÃO APLICADA.
+//
+// Este arquivo é apenas o DIFF proposto para `prisma/schema.prisma`. Ele NÃO é
+// lido pelo Prisma. Serve para revisão do que muda: novo enum
+// `CompanyMembershipStatus`, novo model `CompanyMembership`, e as
+// back-relations correspondentes em `User`/`Company`.
+//
+// Nota de formatação: o `@relation(...)` foi escrito em uma única linha por
+// campo (em vez de multi-linha) — o parser do Prisma 7 exige que cada linha
+// seja uma declaração de campo/atributo completa; a versão multi-linha não é
+// sintaxe válida. Mudança puramente sintática: nome da relação, `fields`,
+// `references`, `onDelete` e `onUpdate` são exatamente os aprovados.
+//
+// Ver M2A_add_company_memberships.sql (SQL exato, conferido contra o banco de
+// dev pós-M1: sem drift) e o diagnóstico pré-M2
+// (`scripts/diagnose-pre-m2.ts`) que confirma 0 bloqueadores para o backfill.
+// ============================================================================
+
+// (1) NOVO ENUM — adicionar antes de `model Company`.
+
+enum CompanyMembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+// (2) NOVO MODEL — adicionar após o fechamento de `model Company` (antes do
+//     bloco de Autenticação/Better Auth).
+//
+// Não há FK entre `UserRole` e `CompanyMembership` — decisão já registrada em
+// docs/adr/ADR-001, seção 3: o invariante `Role.companyId == companyId da
+// membership ativa` é garantido em código (futuro resolver central), não por
+// constraint de banco. Esta migration NÃO implementa esse resolver nem altera
+// `requireCompany()`.
+
+model CompanyMembership {
+  id              String                  @id @default(cuid())
+  userId          String
+  companyId       String
+  status          CompanyMembershipStatus @default(INVITED)
+
+  invitedByUserId String?
+  invitedAt       DateTime                @default(now())
+  activatedAt     DateTime?
+  suspendedAt     DateTime?
+  revokedAt       DateTime?
+
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  // onDelete: Cascade — excluir o User remove suas memberships (não faz
+  // sentido uma membership sem o usuário titular).
+  user            User     @relation("CompanyMembershipUser", fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  // onDelete: Restrict — nunca apagar uma Company que ainda tem membership
+  // (mesma lógica de proteção já usada em `createdByProviderId` da M1):
+  // força um encerramento explícito (revogar memberships) antes de qualquer
+  // exclusão física de empresa, que hoje nem existe como rota.
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  // onDelete: SetNull — excluir o usuário que convidou preserva a membership
+  // do convidado; só perde o registro de "quem convidou" (proveniência
+  // acessória, mesmo padrão de AuditLog.actorUserId e
+  // SstProviderCompany.approvedByUserId).
+  invitedByUser   User?    @relation("CompanyMembershipInviter", fields: [invitedByUserId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@unique([userId, companyId])
+  @@index([companyId, status])
+  @@index([userId, status])
+  @@index([invitedByUserId])
+}
+
+// (3) Back-relations em `User` (junto das relações existentes, ex.: perto de
+//     `auditLogsAsActor`):
+//
+//   auditLogsAsActor AuditLog[] @relation("AuditLogActor")
+// + companyMemberships        CompanyMembership[] @relation("CompanyMembershipUser")
+// + invitedCompanyMemberships CompanyMembership[] @relation("CompanyMembershipInviter")
+
+// (4) Back-relation em `Company` (junto das demais listas de relação, antes
+//     do `@@index([createdByProviderId])` já existente da M1):
+//
+//   auditLogs                AuditLog[]
+// + memberships               CompanyMembership[]
+//
+//   @@index([createdByProviderId])

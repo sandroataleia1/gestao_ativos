@@ -11,6 +11,8 @@ import {
   findOrCreateManufacturer,
   findOrCreateSupplier,
   resolveByNameOrDefault,
+  type ImportLookupCache,
+  type NamedLookup,
 } from "@/lib/imports/lookups";
 
 const assetRowSchema = z.object({
@@ -55,6 +57,9 @@ export async function processAssetRow(
   tx: Prisma.TransactionClient,
   companyId: string,
   row: WorkbookRow,
+  lookupCache: ImportLookupCache,
+  statuses: NamedLookup[],
+  conditions: NamedLookup[],
   dryRun = false,
 ): Promise<ImportRowResult> {
   const errors: string[] = [];
@@ -70,7 +75,7 @@ export async function processAssetRow(
   }
   const raw = parsedRow.data;
 
-  const category = await findOrCreateAssetCategory(tx, companyId, raw.categoria, dryRun);
+  const category = await findOrCreateAssetCategory(tx, companyId, raw.categoria, lookupCache.categories, dryRun);
   if (!category && !dryRun) {
     errors.push(`categoria: Não foi possível resolver a categoria "${raw.categoria}".`);
   }
@@ -79,7 +84,13 @@ export async function processAssetRow(
 
   let manufacturerId: string | undefined;
   if (raw.fabricante) {
-    const manufacturer = await findOrCreateManufacturer(tx, companyId, raw.fabricante, dryRun);
+    const manufacturer = await findOrCreateManufacturer(
+      tx,
+      companyId,
+      raw.fabricante,
+      lookupCache.manufacturers,
+      dryRun,
+    );
     manufacturerId = manufacturer?.id;
     if (manufacturer?.created) notes.push(`Fabricante "${raw.fabricante}" criado.`);
     else if (!manufacturer && dryRun) notes.push(`Fabricante "${raw.fabricante}" será criado.`);
@@ -87,16 +98,12 @@ export async function processAssetRow(
 
   let supplierId: string | undefined;
   if (raw.fornecedor) {
-    const supplier = await findOrCreateSupplier(tx, companyId, raw.fornecedor, dryRun);
+    const supplier = await findOrCreateSupplier(tx, companyId, raw.fornecedor, lookupCache.suppliers, dryRun);
     supplierId = supplier?.id;
     if (supplier?.created) notes.push(`Fornecedor "${raw.fornecedor}" criado.`);
     else if (!supplier && dryRun) notes.push(`Fornecedor "${raw.fornecedor}" será criado.`);
   }
 
-  const [statuses, conditions] = await Promise.all([
-    tx.assetStatus.findMany({ where: { companyId, active: true }, select: { id: true, name: true } }),
-    tx.assetCondition.findMany({ where: { companyId, active: true }, select: { id: true, name: true } }),
-  ]);
   const status = resolveByNameOrDefault(statuses, raw.status ?? "", ["Disponível"]);
   const condition = resolveByNameOrDefault(conditions, raw.condicao ?? "", ["Novo"]);
   if (status && !status.matched && raw.status) {

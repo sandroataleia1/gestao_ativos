@@ -9,28 +9,73 @@ import type { Prisma } from "@/app/generated/prisma/client";
 
 type FindOrCreateResult = { id: string; created: boolean } | null;
 
+// Cache em memória, escopado a UMA execução de importação (criado por
+// createImportLookupCache() em process.ts e passado por todas as linhas) —
+// evita repetir findFirst pro mesmo nome em planilhas de milhares de linhas
+// com poucos valores distintos de categoria/fabricante/fornecedor/local/
+// setor/cargo (ex.: 1.000 linhas, 5 categorias -> só 5 idas ao banco em vez
+// de até 1.000). Cacheia inclusive o resultado "não encontrado" (dryRun):
+// se a mesma planilha repete um nome novo, a segunda ocorrência já sabe que
+// "será criado" sem perguntar de novo ao banco.
+export type ImportLookupCache = {
+  departments: Map<string, FindOrCreateResult>;
+  positions: Map<string, FindOrCreateResult>;
+  categories: Map<string, FindOrCreateResult>;
+  manufacturers: Map<string, FindOrCreateResult>;
+  suppliers: Map<string, FindOrCreateResult>;
+  locations: Map<string, FindOrCreateResult>;
+};
+
+export function createImportLookupCache(): ImportLookupCache {
+  return {
+    departments: new Map(),
+    positions: new Map(),
+    categories: new Map(),
+    manufacturers: new Map(),
+    suppliers: new Map(),
+    locations: new Map(),
+  };
+}
+
 async function findOrCreateByName<T extends { id: string }>(params: {
+  cache: Map<string, FindOrCreateResult>;
+  cacheKey: string;
   find: () => Promise<T | null>;
   create: () => Promise<T>;
   dryRun: boolean;
 }): Promise<FindOrCreateResult> {
+  const cached = params.cache.get(params.cacheKey);
+  if (cached !== undefined) return cached;
+
   const existing = await params.find();
-  if (existing) return { id: existing.id, created: false };
-  if (params.dryRun) return null;
+  if (existing) {
+    const result: FindOrCreateResult = { id: existing.id, created: false };
+    params.cache.set(params.cacheKey, result);
+    return result;
+  }
+  if (params.dryRun) {
+    params.cache.set(params.cacheKey, null);
+    return null;
+  }
 
   const created = await params.create();
-  return { id: created.id, created: true };
+  const result: FindOrCreateResult = { id: created.id, created: true };
+  params.cache.set(params.cacheKey, result);
+  return result;
 }
 
 export async function findOrCreateDepartment(
   tx: Prisma.TransactionClient,
   companyId: string,
   name: string,
+  cache: Map<string, FindOrCreateResult>,
   dryRun: boolean,
 ): Promise<FindOrCreateResult> {
   const trimmed = name.trim();
   if (!trimmed) return null;
   return findOrCreateByName({
+    cache,
+    cacheKey: trimmed.toLowerCase(),
     find: () => tx.department.findFirst({ where: { companyId, name: { equals: trimmed, mode: "insensitive" } } }),
     create: () => tx.department.create({ data: { companyId, name: trimmed } }),
     dryRun,
@@ -41,11 +86,14 @@ export async function findOrCreatePosition(
   tx: Prisma.TransactionClient,
   companyId: string,
   name: string,
+  cache: Map<string, FindOrCreateResult>,
   dryRun: boolean,
 ): Promise<FindOrCreateResult> {
   const trimmed = name.trim();
   if (!trimmed) return null;
   return findOrCreateByName({
+    cache,
+    cacheKey: trimmed.toLowerCase(),
     find: () => tx.position.findFirst({ where: { companyId, name: { equals: trimmed, mode: "insensitive" } } }),
     create: () => tx.position.create({ data: { companyId, name: trimmed } }),
     dryRun,
@@ -56,11 +104,14 @@ export async function findOrCreateAssetCategory(
   tx: Prisma.TransactionClient,
   companyId: string,
   name: string,
+  cache: Map<string, FindOrCreateResult>,
   dryRun: boolean,
 ): Promise<FindOrCreateResult> {
   const trimmed = name.trim();
   if (!trimmed) return null;
   return findOrCreateByName({
+    cache,
+    cacheKey: trimmed.toLowerCase(),
     find: () =>
       tx.assetCategory.findFirst({
         where: { companyId, name: { equals: trimmed, mode: "insensitive" }, deletedAt: null },
@@ -74,11 +125,14 @@ export async function findOrCreateManufacturer(
   tx: Prisma.TransactionClient,
   companyId: string,
   name: string,
+  cache: Map<string, FindOrCreateResult>,
   dryRun: boolean,
 ): Promise<FindOrCreateResult> {
   const trimmed = name.trim();
   if (!trimmed) return null;
   return findOrCreateByName({
+    cache,
+    cacheKey: trimmed.toLowerCase(),
     find: () =>
       tx.manufacturer.findFirst({
         where: { companyId, name: { equals: trimmed, mode: "insensitive" }, deletedAt: null },
@@ -92,11 +146,14 @@ export async function findOrCreateSupplier(
   tx: Prisma.TransactionClient,
   companyId: string,
   corporateName: string,
+  cache: Map<string, FindOrCreateResult>,
   dryRun: boolean,
 ): Promise<FindOrCreateResult> {
   const trimmed = corporateName.trim();
   if (!trimmed) return null;
   return findOrCreateByName({
+    cache,
+    cacheKey: trimmed.toLowerCase(),
     find: () =>
       tx.supplier.findFirst({
         where: { companyId, corporateName: { equals: trimmed, mode: "insensitive" }, active: true },
@@ -118,16 +175,27 @@ export async function findOrCreateStockLocation(
   tx: Prisma.TransactionClient,
   companyId: string,
   name: string,
+  cache: Map<string, FindOrCreateResult>,
   dryRun: boolean,
 ): Promise<FindOrCreateResult> {
   const trimmed = name.trim();
   if (!trimmed) return null;
 
+  const cached = cache.get(trimmed.toLowerCase());
+  if (cached !== undefined) return cached;
+
   const existingLocation = await tx.location.findFirst({
     where: { companyId, name: { equals: trimmed, mode: "insensitive" }, active: true },
   });
-  if (existingLocation) return { id: existingLocation.id, created: false };
-  if (dryRun) return null;
+  if (existingLocation) {
+    const result: FindOrCreateResult = { id: existingLocation.id, created: false };
+    cache.set(trimmed.toLowerCase(), result);
+    return result;
+  }
+  if (dryRun) {
+    cache.set(trimmed.toLowerCase(), null);
+    return null;
+  }
 
   const locationType =
     (await tx.locationType.findFirst({ where: { companyId, name: WAREHOUSE_LOCATION_TYPE_NAME } })) ??
@@ -136,7 +204,9 @@ export async function findOrCreateStockLocation(
   const created = await tx.location.create({
     data: { companyId, name: trimmed, locationTypeId: locationType.id },
   });
-  return { id: created.id, created: true };
+  const result: FindOrCreateResult = { id: created.id, created: true };
+  cache.set(trimmed.toLowerCase(), result);
+  return result;
 }
 
 export type NamedLookup = { id: string; name: string };

@@ -27,6 +27,11 @@ export const PERMISSIONS = {
   ALERT_VIEW: "alert:view",
   IMPORT_VIEW: "import:view",
   IMPORT_MANAGE: "import:manage",
+  COMPANY_MANAGE: "company:manage",
+  TRAINING_VIEW: "training:view",
+  TRAINING_MANAGE: "training:manage",
+  SST_PROVIDER_VIEW: "sst_provider:view",
+  SST_PROVIDER_MANAGE: "sst_provider:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -55,6 +60,11 @@ export const PERMISSION_DESCRIPTIONS: Record<PermissionKey, string> = {
   [PERMISSIONS.ALERT_VIEW]: "Visualizar central de alertas (CA, custódia, estoque)",
   [PERMISSIONS.IMPORT_VIEW]: "Visualizar tela de importação em lote",
   [PERMISSIONS.IMPORT_MANAGE]: "Importar colaboradores, ativos e estoque em lote via Excel",
+  [PERMISSIONS.COMPANY_MANAGE]: "Editar dados e logo da empresa",
+  [PERMISSIONS.TRAINING_VIEW]: "Visualizar catálogo de treinamentos",
+  [PERMISSIONS.TRAINING_MANAGE]: "Criar/editar/inativar treinamentos da empresa",
+  [PERMISSIONS.SST_PROVIDER_VIEW]: "Visualizar prestadores SST vinculados à empresa",
+  [PERMISSIONS.SST_PROVIDER_MANAGE]: "Criar prestadores SST e autorizar/suspender/revogar vínculos",
 };
 
 export const SYSTEM_ROLES = {
@@ -98,6 +108,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRole, PermissionKey[]> = {
     PERMISSIONS.REPORT_VIEW,
     PERMISSIONS.ALERT_VIEW,
     PERMISSIONS.IMPORT_VIEW,
+    PERMISSIONS.TRAINING_VIEW,
+    PERMISSIONS.SST_PROVIDER_VIEW,
   ],
   // RH/ALMOXARIFADO/TECNICO_SST ganham import:view + import:manage "cheio"
   // (não há permissão por tipo de importação — ver docs/imports.md). As
@@ -118,6 +130,9 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRole, PermissionKey[]> = {
     PERMISSIONS.ALERT_VIEW,
     PERMISSIONS.IMPORT_VIEW,
     PERMISSIONS.IMPORT_MANAGE,
+    PERMISSIONS.TRAINING_VIEW,
+    PERMISSIONS.TRAINING_MANAGE,
+    PERMISSIONS.SST_PROVIDER_VIEW,
   ],
   ALMOXARIFADO: [
     PERMISSIONS.ASSET_VIEW,
@@ -136,6 +151,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRole, PermissionKey[]> = {
     PERMISSIONS.ALERT_VIEW,
     PERMISSIONS.IMPORT_VIEW,
     PERMISSIONS.IMPORT_MANAGE,
+    PERMISSIONS.TRAINING_VIEW,
   ],
   TECNICO_SST: [
     PERMISSIONS.ASSET_VIEW,
@@ -151,6 +167,10 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRole, PermissionKey[]> = {
     PERMISSIONS.ALERT_VIEW,
     PERMISSIONS.IMPORT_VIEW,
     PERMISSIONS.IMPORT_MANAGE,
+    PERMISSIONS.TRAINING_VIEW,
+    PERMISSIONS.TRAINING_MANAGE,
+    PERMISSIONS.SST_PROVIDER_VIEW,
+    PERMISSIONS.SST_PROVIDER_MANAGE,
   ],
   // CONSULTA já tem *_VIEW de todo o domínio ("acesso somente leitura a todo
   // o domínio de ativos") — relatórios e alertas são apenas agregações de
@@ -167,5 +187,6 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRole, PermissionKey[]> = {
     PERMISSIONS.EMPLOYEE_VIEW,
     PERMISSIONS.REPORT_VIEW,
     PERMISSIONS.ALERT_VIEW,
+    PERMISSIONS.TRAINING_VIEW,
   ],
 };

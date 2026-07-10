@@ -4,7 +4,14 @@ import { AlertTriangleIcon, PackageIcon, TruckIcon, UsersIcon } from "lucide-rea
 import { prisma } from "@/lib/prisma";
 import { hasPermission, requirePermissionOrDeny } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
-import { custodyListInclude, getCustodyIndicators, serializeCustody } from "@/lib/custodies";
+import {
+  CUSTODY_TABS,
+  type CustodyTab,
+  getCustodiesPage,
+  getCustodyIndicators,
+  serializeCustody,
+} from "@/lib/custodies";
+import { parsePageParams, parseSearchParam, type SearchParamsInput } from "@/lib/pagination";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CustodiesTabs } from "./custodies-tabs";
 import type { CustodyRow } from "./types";
@@ -13,7 +20,7 @@ export const metadata: Metadata = {
   title: "Entregas e Custódia — Gestão de Ativos",
 };
 
-function toRow(custody: Awaited<ReturnType<typeof loadCustodies>>[number]): CustodyRow {
+function toRow(custody: Awaited<ReturnType<typeof getCustodiesPage>>["rows"][number]): CustodyRow {
   const signatureRequest = custody.signatureRequests[0];
   return {
     ...serializeCustody(custody),
@@ -30,22 +37,24 @@ function toRow(custody: Awaited<ReturnType<typeof loadCustodies>>[number]): Cust
   };
 }
 
-function loadCustodies(companyId: string, onlyActive: boolean) {
-  return prisma.assetCustody.findMany({
-    where: { companyId, ...(onlyActive ? { status: "ACTIVE" as const } : {}) },
-    include: custodyListInclude,
-    orderBy: { deliveredAt: "desc" },
-    take: onlyActive ? undefined : 500,
-  });
-}
-
-export default async function CustodiesPage() {
+export default async function CustodiesPage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParamsInput>;
+}) {
   const { companyId } = await requirePermissionOrDeny(PERMISSIONS.CUSTODY_VIEW);
   const canManage = await hasPermission(PERMISSIONS.CUSTODY_MANAGE);
+  const resolvedSearchParams = await searchParams;
 
-  const [activeCustodies, historyCustodies, indicators, conditions] = await Promise.all([
-    loadCustodies(companyId, true),
-    loadCustodies(companyId, false),
+  const rawTab = resolvedSearchParams.tab;
+  const tab: CustodyTab = (CUSTODY_TABS as readonly string[]).includes(rawTab as string)
+    ? (rawTab as CustodyTab)
+    : "active";
+  const { page, pageSize } = parsePageParams(resolvedSearchParams);
+  const search = parseSearchParam(resolvedSearchParams);
+
+  const [{ rows: custodies, total }, indicators, conditions] = await Promise.all([
+    getCustodiesPage(companyId, { tab, page, pageSize, search: search || undefined }),
     getCustodyIndicators(companyId),
     prisma.assetCondition.findMany({
       where: { companyId, active: true },
@@ -111,8 +120,12 @@ export default async function CustodiesPage() {
       </div>
 
       <CustodiesTabs
-        initialActive={activeCustodies.map(toRow)}
-        initialHistory={historyCustodies.map(toRow)}
+        tab={tab}
+        rows={custodies.map(toRow)}
+        total={total}
+        page={page}
+        pageSize={pageSize}
+        overdueCount={indicators.overdueCount}
         conditions={conditions}
         canManage={canManage}
       />

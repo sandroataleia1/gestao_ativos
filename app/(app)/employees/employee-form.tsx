@@ -159,6 +159,7 @@ export function EmployeeForm({
     event.preventDefault();
     setIsSubmitting(true);
     setFieldErrors({});
+    setFormError(null);
 
     const payload = {
       name: values.name,
@@ -191,7 +192,7 @@ export function EmployeeForm({
             (key) => `employee-${key}`,
           );
         }
-        toast.error(data?.error ?? "Não foi possível salvar o colaborador.");
+        setFormError(data?.error ?? "Não foi possível salvar o colaborador.");
         return;
       }
 
@@ -199,7 +200,7 @@ export function EmployeeForm({
       router.push("/employees");
       router.refresh();
     } catch {
-      toast.error("Não foi possível conectar ao servidor.");
+      setFormError("Não foi possível conectar ao servidor.");
     } finally {
       setIsSubmitting(false);
     }
@@ -221,6 +222,8 @@ export function EmployeeForm({
       <Card>
         <CardContent className="pt-6">
           <form onSubmit={handleSubmit} className="grid max-w-2xl gap-4">
+            {formError ? <p className="text-sm text-destructive">{formError}</p> : null}
+
             <div className="grid gap-2">
               <Label htmlFor="employee-name">Nome</Label>
               <Input
@@ -351,7 +354,7 @@ export function EmployeeForm({
             </div>
 
             <div className="grid gap-2">
-              <Label>Status</Label>
+              <Label>Status do registro</Label>
               <Select
                 items={{ ACTIVE: "Ativo", INACTIVE: "Inativo" }}
                 value={values.status}

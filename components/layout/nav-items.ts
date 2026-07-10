@@ -3,7 +3,9 @@ import {
   BarChart3Icon,
   BoxesIcon,
   Building2Icon,
+  CalendarClockIcon,
   FactoryIcon,
+  GraduationCapIcon,
   LayoutDashboardIcon,
   PackageIcon,
   SettingsIcon,
@@ -32,6 +34,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Dashboard", href: "/dashboard", icon: LayoutDashboardIcon },
       { label: "Estoque", href: "/stock", icon: BoxesIcon },
       { label: "Entregas", href: "/custodies", icon: TruckIcon },
+      { label: "Turmas de Treinamento", href: "/trainings/classes", icon: CalendarClockIcon },
       { label: "Alertas", href: "/alerts", icon: AlertTriangleIcon },
     ],
   },
@@ -40,6 +43,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Ativos", href: "/assets", icon: PackageIcon },
       { label: "Colaboradores", href: "/employees", icon: UsersIcon },
+      { label: "Treinamentos", href: "/trainings", icon: GraduationCapIcon },
       { label: "Categorias", href: "/cadastros/categorias", icon: TagIcon },
       { label: "Fabricantes", href: "/cadastros/fabricantes", icon: FactoryIcon },
       { label: "Fornecedores", href: "/cadastros/fornecedores", icon: Building2Icon },
@@ -56,3 +60,18 @@ export const NAV_GROUPS: NavGroup[] = [
 ];
 
 export const NAV_ITEMS: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
+
+/**
+ * Item de navegação "ativo" para um pathname — o de maior prefixo entre os
+ * que casam (`pathname === href` ou `pathname.startsWith(href + "/")`).
+ * Necessário porque alguns hrefs são prefixo de outros (ex.: "/trainings" e
+ * "/trainings/classes") — sem isso, os dois acenderiam juntos em
+ * "/trainings/classes/...".
+ */
+export function getActiveNavHref(pathname: string): string | undefined {
+  const matches = NAV_ITEMS.filter(
+    (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
+  );
+  if (matches.length === 0) return undefined;
+  return matches.reduce((best, item) => (item.href.length > best.href.length ? item : best)).href;
+}

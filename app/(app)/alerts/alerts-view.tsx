@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { CheckCircle2Icon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import {
@@ -97,7 +98,7 @@ export function AlertsView({ initialAlerts }: { initialAlerts: Alert[] }) {
         </Select>
       </div>
 
-      <div className="rounded-xl border bg-card">
+      <div className="overflow-x-auto rounded-xl border bg-card">
         <Table>
           <TableHeader>
             <TableRow>
@@ -148,7 +149,14 @@ export function AlertsView({ initialAlerts }: { initialAlerts: Alert[] }) {
             ) : (
               <TableRow>
                 <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
-                  Nenhum alerta encontrado.
+                  {initialAlerts.length ? (
+                    "Nenhum alerta encontrado para os filtros aplicados."
+                  ) : (
+                    <div className="flex items-center justify-center gap-2">
+                      <CheckCircle2Icon className="size-4 text-emerald-600 dark:text-emerald-500" />
+                      <span>Nenhum alerta no momento. Tudo em dia.</span>
+                    </div>
+                  )}
                 </TableCell>
               </TableRow>
             )}

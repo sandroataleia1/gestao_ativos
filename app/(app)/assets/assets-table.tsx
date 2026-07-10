@@ -2,22 +2,16 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import {
-  type ColumnDef,
-  type SortingState,
-  flexRender,
-  getCoreRowModel,
-  getSortedRowModel,
-  useReactTable,
-} from "@tanstack/react-table";
-import { MoreHorizontalIcon, PlusIcon, SearchIcon } from "lucide-react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { type ColumnDef, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { SortableHeader } from "@/components/ui/data-table-column-header";
+import { ServerSortableHeader } from "@/components/ui/data-table-column-header";
+import { DebouncedSearchInput } from "@/components/ui/debounced-search-input";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import {
   Table,
   TableBody,
@@ -39,6 +33,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -49,7 +44,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { computeCaBadge, type CaBadge } from "@/lib/certifications/badge";
+import { computeCaBadge, type CaBadge, type CaStatusFilter } from "@/lib/certifications/badge";
+import type { AssetSortField } from "@/lib/assets";
 import { QrCodeDialog } from "@/components/qr/qr-code-dialog";
 import type { AssetRow, LookupOption } from "./types";
 
@@ -61,14 +57,22 @@ const CA_BADGE_LABELS: Record<CaBadge, string> = {
   NONE: "Sem CA",
 };
 
-const CA_FILTER_LABELS: Record<CaBadge, string> = {
-  VALID: "Ativos com CA válido",
-  EXPIRED: "Ativos com CA vencido",
-  NONE: "Ativos sem CA",
+// Chaves em minúsculo — precisam bater com `caStatus` (query param lido em
+// app/(app)/assets/page.tsx via CA_STATUS_VALUES/buildCaStatusWhere), não
+// com `CaBadge` (usado só pro badge exibido por linha).
+const CA_FILTER_LABELS: Record<CaStatusFilter, string> = {
+  valid: "Ativos com CA válido",
+  expired: "Ativos com CA vencido",
+  none: "Ativos sem CA",
 };
 
 export function AssetsTable({
   initialAssets,
+  total,
+  page,
+  pageSize,
+  sort,
+  dir,
   categories,
   manufacturers,
   suppliers,
@@ -77,6 +81,11 @@ export function AssetsTable({
   canManage,
 }: {
   initialAssets: AssetRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  sort: AssetSortField;
+  dir: "asc" | "desc";
   categories: LookupOption[];
   manufacturers: LookupOption[];
   suppliers: LookupOption[];
@@ -85,58 +94,50 @@ export function AssetsTable({
   canManage: boolean;
 }) {
   const router = useRouter();
-  const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState(ALL_VALUE);
-  const [statusFilter, setStatusFilter] = useState(ALL_VALUE);
-  const [conditionFilter, setConditionFilter] = useState(ALL_VALUE);
-  const [caFilter, setCaFilter] = useState(ALL_VALUE);
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [deleteTarget, setDeleteTarget] = useState<AssetRow | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [qrTarget, setQrTarget] = useState<AssetRow | null>(null);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return initialAssets.filter((asset) => {
-      if (categoryFilter !== ALL_VALUE && asset.categoryId !== categoryFilter) return false;
-      if (statusFilter !== ALL_VALUE && asset.statusId !== statusFilter) return false;
-      if (conditionFilter !== ALL_VALUE && asset.conditionId !== conditionFilter) return false;
-      if (caFilter !== ALL_VALUE && computeCaBadge(asset.certifications) !== caFilter) return false;
-      if (!q) return true;
-      return (
-        asset.name.toLowerCase().includes(q) ||
-        asset.assetCode.toLowerCase().includes(q) ||
-        asset.category.name.toLowerCase().includes(q) ||
-        (asset.manufacturer?.name.toLowerCase().includes(q) ?? false)
-      );
-    });
-  }, [initialAssets, search, categoryFilter, statusFilter, conditionFilter, caFilter]);
+  function applyFilter(key: string, value: string | undefined) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (!value || value === ALL_VALUE) params.delete(key);
+    else params.set(key, value);
+    params.delete("page");
+    router.push(`${pathname}?${params.toString()}`);
+  }
 
   const columns = useMemo<ColumnDef<AssetRow>[]>(() => {
+    const headerFor = (field: AssetSortField, label: string) => (
+      <ServerSortableHeader field={field} label={label} currentField={sort} currentDir={dir} />
+    );
+
     const base: ColumnDef<AssetRow>[] = [
       {
         accessorKey: "name",
-        header: ({ column }) => <SortableHeader column={column} label="Nome" />,
+        header: () => headerFor("name", "Nome"),
       },
       {
         accessorKey: "assetCode",
-        header: ({ column }) => <SortableHeader column={column} label="Código" />,
+        header: () => headerFor("assetCode", "Código"),
       },
       {
         id: "category",
         accessorFn: (row) => row.category.name,
-        header: ({ column }) => <SortableHeader column={column} label="Categoria" />,
+        header: () => headerFor("category", "Categoria"),
         cell: ({ row }) => row.original.category.name,
       },
       {
         id: "manufacturer",
         accessorFn: (row) => row.manufacturer?.name ?? "",
-        header: ({ column }) => <SortableHeader column={column} label="Fabricante" />,
+        header: () => headerFor("manufacturer", "Fabricante"),
         cell: ({ row }) => row.original.manufacturer?.name ?? "—",
       },
       {
         id: "status",
         accessorFn: (row) => row.status.name,
-        header: ({ column }) => <SortableHeader column={column} label="Status" />,
+        header: () => headerFor("status", "Status"),
         cell: ({ row }) => {
           const { color, name } = row.original.status;
           return (
@@ -156,13 +157,13 @@ export function AssetsTable({
       {
         id: "condition",
         accessorFn: (row) => row.condition.name,
-        header: ({ column }) => <SortableHeader column={column} label="Condição" />,
+        header: () => headerFor("condition", "Condição"),
         cell: ({ row }) => <Badge variant="secondary">{row.original.condition.name}</Badge>,
       },
       {
         id: "active",
         accessorFn: (row) => (row.active ? 1 : 0),
-        header: ({ column }) => <SortableHeader column={column} label="Ativo" />,
+        header: () => headerFor("active", "Ativo"),
         cell: ({ row }) => (
           <Badge variant={row.original.active ? "default" : "outline"}>
             {row.original.active ? "Ativo" : "Inativo"}
@@ -172,7 +173,7 @@ export function AssetsTable({
       {
         id: "ca",
         accessorFn: (row) => computeCaBadge(row.certifications),
-        header: ({ column }) => <SortableHeader column={column} label="CA" />,
+        header: "CA",
         cell: ({ row }) => {
           const badge = computeCaBadge(row.original.certifications);
           return (
@@ -196,13 +197,20 @@ export function AssetsTable({
       cell: ({ row }) => (
         <div className="flex justify-end">
           <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button variant="ghost" size="icon-sm" aria-label="Ações">
-                  <MoreHorizontalIcon className="size-4" />
-                </Button>
-              }
-            />
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <DropdownMenuTrigger
+                    render={
+                      <Button variant="ghost" size="icon-sm" aria-label="Ações">
+                        <MoreHorizontalIcon className="size-4" />
+                      </Button>
+                    }
+                  />
+                }
+              />
+              <TooltipContent>Ações</TooltipContent>
+            </Tooltip>
             <DropdownMenuContent align="end">
               <DropdownMenuItem render={<Link href={`/assets/${row.original.id}/edit`} />}>
                 Editar
@@ -220,17 +228,12 @@ export function AssetsTable({
     });
 
     return base;
-  }, [canManage]);
-
-  const [sorting, setSorting] = useState<SortingState>([]);
+  }, [canManage, sort, dir]);
 
   const table = useReactTable({
-    data: filtered,
+    data: initialAssets,
     columns,
-    state: { sorting },
-    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
   });
 
   async function handleDeleteConfirm() {
@@ -252,27 +255,30 @@ export function AssetsTable({
     }
   }
 
+  const hasActiveFilters = Boolean(
+    searchParams.get("q") ||
+      searchParams.get("categoryId") ||
+      searchParams.get("statusId") ||
+      searchParams.get("conditionId") ||
+      searchParams.get("caStatus"),
+  );
+
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative w-full max-w-xs">
-            <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder="Buscar por nome, código, categoria, fabricante..."
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              className="w-72 pl-8"
-            />
-          </div>
+          <DebouncedSearchInput
+            placeholder="Buscar por nome, código, categoria, fabricante..."
+            className="w-72"
+          />
 
           <Select
             items={{
               [ALL_VALUE]: "Todas as categorias",
               ...Object.fromEntries(categories.map((c) => [c.id, c.name])),
             }}
-            value={categoryFilter}
-            onValueChange={(value) => setCategoryFilter(value ?? ALL_VALUE)}
+            value={searchParams.get("categoryId") ?? ALL_VALUE}
+            onValueChange={(value) => applyFilter("categoryId", value as string)}
           >
             <SelectTrigger size="sm">
               <SelectValue placeholder="Categoria" />
@@ -292,8 +298,8 @@ export function AssetsTable({
               [ALL_VALUE]: "Todos os status",
               ...Object.fromEntries(statuses.map((s) => [s.id, s.name])),
             }}
-            value={statusFilter}
-            onValueChange={(value) => setStatusFilter(value ?? ALL_VALUE)}
+            value={searchParams.get("statusId") ?? ALL_VALUE}
+            onValueChange={(value) => applyFilter("statusId", value as string)}
           >
             <SelectTrigger size="sm">
               <SelectValue placeholder="Status" />
@@ -313,8 +319,8 @@ export function AssetsTable({
               [ALL_VALUE]: "Todas as condições",
               ...Object.fromEntries(conditions.map((c) => [c.id, c.name])),
             }}
-            value={conditionFilter}
-            onValueChange={(value) => setConditionFilter(value ?? ALL_VALUE)}
+            value={searchParams.get("conditionId") ?? ALL_VALUE}
+            onValueChange={(value) => applyFilter("conditionId", value as string)}
           >
             <SelectTrigger size="sm">
               <SelectValue placeholder="Condição" />
@@ -331,8 +337,8 @@ export function AssetsTable({
 
           <Select
             items={{ [ALL_VALUE]: "Todos (CA)", ...CA_FILTER_LABELS }}
-            value={caFilter}
-            onValueChange={(value) => setCaFilter(value ?? ALL_VALUE)}
+            value={searchParams.get("caStatus") ?? ALL_VALUE}
+            onValueChange={(value) => applyFilter("caStatus", value as string)}
           >
             <SelectTrigger size="sm">
               <SelectValue placeholder="CA" />
@@ -387,11 +393,11 @@ export function AssetsTable({
                 <TableCell colSpan={columns.length} className="h-32 text-center">
                   <div className="grid justify-items-center gap-2 text-muted-foreground">
                     <p>
-                      {initialAssets.length
+                      {hasActiveFilters
                         ? "Nenhum ativo encontrado para os filtros aplicados."
                         : "Nenhum ativo cadastrado ainda."}
                     </p>
-                    {canManage && !initialAssets.length ? (
+                    {canManage && !hasActiveFilters ? (
                       <Button size="sm" render={<Link href="/assets/new" />}>
                         <PlusIcon />
                         Cadastrar o primeiro ativo
@@ -404,6 +410,8 @@ export function AssetsTable({
           </TableBody>
         </Table>
       </div>
+
+      <PaginationBar page={page} pageSize={pageSize} total={total} />
 
       <QrCodeDialog
         open={Boolean(qrTarget)}

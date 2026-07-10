@@ -384,7 +384,7 @@ function BreakdownCard({ title, items }: { title: string; items: { label: string
             ))}
           </ul>
         ) : (
-          <p className="text-sm text-muted-foreground">Sem dados.</p>
+          <p className="text-sm text-muted-foreground">Nenhum registro encontrado.</p>
         )}
       </CardContent>
     </Card>
@@ -415,7 +415,7 @@ function ReportTable<T>({
           Exportar CSV
         </Button>
       </div>
-      <div className="rounded-xl border bg-card">
+      <div className="overflow-x-auto rounded-xl border bg-card">
         <Table>
           <TableHeader>
             <TableRow>

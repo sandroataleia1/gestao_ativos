@@ -1,10 +1,19 @@
 import type { Metadata } from "next";
-import { BuildingIcon, MessageCircleIcon, ShieldCheckIcon, UserIcon } from "lucide-react";
+import Link from "next/link";
+import {
+  BriefcaseIcon,
+  BuildingIcon,
+  MessageCircleIcon,
+  ShieldCheckIcon,
+  UserIcon,
+  UsersIcon,
+} from "lucide-react";
 
 import { prisma } from "@/lib/prisma";
 import { getCurrentCompany, hasPermission, requireAuthOrDeny } from "@/lib/auth-server";
 import { PERMISSIONS, PERMISSION_DESCRIPTIONS, type PermissionKey } from "@/lib/permissions";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { WhatsappConnectPanel } from "./whatsapp-connect-panel";
 
@@ -18,14 +27,16 @@ function formatDateTime(value: Date) {
 
 // Tela somente leitura: dados da própria empresa/conta e as permissões
 // efetivas do usuário logado (união dos papéis atribuídos a ele nesta
-// empresa) — não há aqui gestão de usuários/papéis/cadastros de apoio
-// (USER_MANAGE, ROLE_MANAGE, CATEGORY_MANAGE etc. ainda não têm UI própria;
-// essa é uma limitação conhecida da auditoria do MVP, não escopo desta
-// página).
+// empresa). Gestão de usuários (USER_MANAGE) tem tela própria em
+// /configuracoes/usuarios; papéis customizados (ROLE_MANAGE) e cadastros de
+// apoio (CATEGORY_MANAGE etc.) continuam sem UI própria.
 export default async function SettingsPage() {
   const user = await requireAuthOrDeny();
   const company = await getCurrentCompany();
-  const canManageWhatsapp = await hasPermission(PERMISSIONS.USER_MANAGE);
+  const canManageUsers = await hasPermission(PERMISSIONS.USER_MANAGE);
+  const canManageCompany = await hasPermission(PERMISSIONS.COMPANY_MANAGE);
+  const canViewSstProviders = await hasPermission(PERMISSIONS.SST_PROVIDER_VIEW);
+  const canManageSstProviders = await hasPermission(PERMISSIONS.SST_PROVIDER_MANAGE);
 
   const userRoles = await prisma.userRole.findMany({
     where: { userId: user.id, companyId: user.companyId },
@@ -57,13 +68,20 @@ export default async function SettingsPage() {
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Card>
-          <CardHeader className="flex flex-row items-center gap-2">
-            <BuildingIcon className="size-4 text-primary" />
-            <CardTitle className="text-sm font-medium text-muted-foreground">Empresa</CardTitle>
+          <CardHeader className="flex flex-row items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <BuildingIcon className="size-4 text-primary" />
+              <CardTitle className="text-sm font-medium text-muted-foreground">Empresa</CardTitle>
+            </div>
+            {canManageCompany ? (
+              <Button variant="outline" size="sm" render={<Link href="/configuracoes/empresa" />}>
+                Gerenciar
+              </Button>
+            ) : null}
           </CardHeader>
           <CardContent className="grid gap-1.5 text-sm">
             <p>
-              <span className="text-muted-foreground">Nome:</span> {company?.name ?? "—"}
+              <span className="text-muted-foreground">Nome:</span> {company?.tradeName || company?.name || "—"}
             </p>
             <p>
               <span className="text-muted-foreground">Documento:</span> {company?.document ?? "—"}
@@ -122,7 +140,26 @@ export default async function SettingsPage() {
         </CardContent>
       </Card>
 
-      {canManageWhatsapp ? (
+      {canManageUsers ? (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <UsersIcon className="size-4 text-primary" />
+              <CardTitle className="text-sm font-medium text-muted-foreground">Usuários</CardTitle>
+            </div>
+            <Button variant="outline" size="sm" render={<Link href="/configuracoes/usuarios" />}>
+              Gerenciar
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              Liste, crie, convide, bloqueie/desbloqueie, redefina senha ou exclua usuários desta empresa.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {canManageUsers ? (
         <Card>
           <CardHeader className="flex flex-row items-center gap-2">
             <MessageCircleIcon className="size-4 text-primary" />
@@ -132,6 +169,25 @@ export default async function SettingsPage() {
           </CardHeader>
           <CardContent>
             <WhatsappConnectPanel initialHasInstance={Boolean(company?.whatsappInstanceName)} />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {canViewSstProviders ? (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <BriefcaseIcon className="size-4 text-primary" />
+              <CardTitle className="text-sm font-medium text-muted-foreground">Prestadores SST</CardTitle>
+            </div>
+            <Button variant="outline" size="sm" render={<Link href="/configuracoes/sst-providers" />}>
+              {canManageSstProviders ? "Gerenciar" : "Ver"}
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              Consultorias/prestadores de SST autorizados a gerenciar treinamentos desta empresa.
+            </p>
           </CardContent>
         </Card>
       ) : null}

@@ -4,7 +4,11 @@ import type { Prisma } from "@/app/generated/prisma/client";
 import { employeeInputSchema } from "@/lib/validations/employee";
 import type { WorkbookRow } from "@/lib/excel";
 import type { ImportRowResult } from "@/lib/imports/types";
-import { findOrCreateDepartment, findOrCreatePosition } from "@/lib/imports/lookups";
+import {
+  findOrCreateDepartment,
+  findOrCreatePosition,
+  type ImportLookupCache,
+} from "@/lib/imports/lookups";
 
 // Linha crua da planilha (texto livre) — bem mais permissiva que
 // employeeInputSchema (que já espera valores prontos, tipo departmentId em
@@ -41,6 +45,7 @@ export async function processEmployeeRow(
   tx: Prisma.TransactionClient,
   companyId: string,
   row: WorkbookRow,
+  lookupCache: ImportLookupCache,
   dryRun = false,
 ): Promise<ImportRowResult> {
   const errors: string[] = [];
@@ -58,7 +63,7 @@ export async function processEmployeeRow(
 
   let departmentId: string | undefined;
   if (raw.setor) {
-    const department = await findOrCreateDepartment(tx, companyId, raw.setor, dryRun);
+    const department = await findOrCreateDepartment(tx, companyId, raw.setor, lookupCache.departments, dryRun);
     if (department) {
       departmentId = department.id;
       if (department.created) notes.push(`Setor "${raw.setor}" criado.`);
@@ -69,7 +74,7 @@ export async function processEmployeeRow(
 
   let positionId: string | undefined;
   if (raw.cargo) {
-    const position = await findOrCreatePosition(tx, companyId, raw.cargo, dryRun);
+    const position = await findOrCreatePosition(tx, companyId, raw.cargo, lookupCache.positions, dryRun);
     if (position) {
       positionId = position.id;
       if (position.created) notes.push(`Cargo "${raw.cargo}" criado.`);

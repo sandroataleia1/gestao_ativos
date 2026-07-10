@@ -13,6 +13,7 @@ import {
   toNumber,
 } from "@/lib/stock";
 import { getDefaultWarehouseLocationId } from "@/lib/stock-setup-provisioning";
+import { invalidateCompanyData } from "@/lib/cache";
 
 // Entrada de estoque. O `trackingMode` real do Asset (nunca o que o client
 // diz que é) decide o caminho:
@@ -79,6 +80,7 @@ export async function POST(request: Request) {
         return { balance, movement };
       });
 
+      invalidateCompanyData(companyId, ["dashboard", "stock"]);
       return NextResponse.json(
         {
           balance: { ...result.balance, quantity: toNumber(result.balance.quantity) },
@@ -145,6 +147,7 @@ export async function POST(request: Request) {
       return created;
     });
 
+    invalidateCompanyData(companyId, ["dashboard", "stock"]);
     return NextResponse.json({ units }, { status: 201 });
   } catch (error) {
     return handleApiError(error);

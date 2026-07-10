@@ -1,11 +1,14 @@
 import { z } from "zod";
 
 import type { Prisma } from "@/app/generated/prisma/client";
-import { ValidationError } from "@/lib/api-errors";
-import { getMovementType } from "@/lib/stock";
 import type { WorkbookRow } from "@/lib/excel";
 import type { ImportRowResult } from "@/lib/imports/types";
-import { findOrCreateStockLocation, resolveByNameOrDefault } from "@/lib/imports/lookups";
+import {
+  findOrCreateStockLocation,
+  resolveByNameOrDefault,
+  type ImportLookupCache,
+  type NamedLookup,
+} from "@/lib/imports/lookups";
 
 // Aceita as colunas dos dois formatos (consumível e individual) no mesmo
 // schema — qual conjunto é obrigatório depende do trackingMode real do
@@ -33,6 +36,11 @@ export async function processStockRow(
   companyId: string,
   userId: string,
   row: WorkbookRow,
+  lookupCache: ImportLookupCache,
+  statuses: NamedLookup[],
+  conditions: NamedLookup[],
+  movementType: { id: string } | null,
+  movementTypeError: string | null,
   dryRun = false,
 ): Promise<ImportRowResult> {
   const errors: string[] = [];
@@ -54,7 +62,7 @@ export async function processStockRow(
     return { rowNumber: row.rowNumber, status: "error", errors, notes, preview };
   }
 
-  const location = await findOrCreateStockLocation(tx, companyId, raw.local, dryRun);
+  const location = await findOrCreateStockLocation(tx, companyId, raw.local, lookupCache.locations, dryRun);
   if (location?.created) notes.push(`Local "${raw.local}" criado.`);
   else if (!location && dryRun) notes.push(`Local "${raw.local}" será criado.`);
   if (!location && !dryRun) {
@@ -62,13 +70,7 @@ export async function processStockRow(
     return { rowNumber: row.rowNumber, status: "error", errors, notes, preview };
   }
 
-  let movementType: { id: string } | null = null;
-  try {
-    movementType = await getMovementType(companyId, "ENTRY");
-  } catch (error) {
-    if (error instanceof ValidationError) errors.push(error.message);
-    else throw error;
-  }
+  if (movementTypeError) errors.push(movementTypeError);
 
   if (asset.trackingMode === "CONSUMABLE") {
     const quantity = Number(raw.quantidade);
@@ -111,10 +113,6 @@ export async function processStockRow(
     errors.push("numero_serie: Informe ao menos um número de série ou patrimônio.");
   }
 
-  const [statuses, conditions] = await Promise.all([
-    tx.assetStatus.findMany({ where: { companyId, active: true }, select: { id: true, name: true } }),
-    tx.assetCondition.findMany({ where: { companyId, active: true }, select: { id: true, name: true } }),
-  ]);
   const status = resolveByNameOrDefault(statuses, raw.status ?? "", ["Disponível"]);
   const condition = resolveByNameOrDefault(conditions, raw.condicao ?? "", ["Novo"]);
   if (status && !status.matched && raw.status) {

@@ -2,22 +2,16 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import {
-  type ColumnDef,
-  type SortingState,
-  flexRender,
-  getCoreRowModel,
-  getSortedRowModel,
-  useReactTable,
-} from "@tanstack/react-table";
-import { MoreHorizontalIcon, PlusIcon, SearchIcon } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { type ColumnDef, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { SortableHeader } from "@/components/ui/data-table-column-header";
+import { ServerSortableHeader } from "@/components/ui/data-table-column-header";
+import { DebouncedSearchInput } from "@/components/ui/debounced-search-input";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import {
   Table,
   TableBody,
@@ -32,6 +26,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,55 +37,62 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import type { EmployeeSortField } from "@/lib/employees";
 import type { EmployeeRow } from "./types";
 
 export function EmployeesTable({
   initialEmployees,
+  total,
+  page,
+  pageSize,
+  sort,
+  dir,
   canManage,
 }: {
   initialEmployees: EmployeeRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  sort: EmployeeSortField;
+  dir: "asc" | "desc";
   canManage: boolean;
 }) {
   const router = useRouter();
-  const [search, setSearch] = useState("");
+  const searchParams = useSearchParams();
   const [deleteTarget, setDeleteTarget] = useState<EmployeeRow | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return initialEmployees;
-    return initialEmployees.filter(
-      (employee) =>
-        employee.name.toLowerCase().includes(q) || employee.document.toLowerCase().includes(q),
-    );
-  }, [initialEmployees, search]);
+  const hasActiveFilters = Boolean(searchParams.get("q"));
 
   const columns = useMemo<ColumnDef<EmployeeRow>[]>(() => {
+    const headerFor = (field: EmployeeSortField, label: string) => (
+      <ServerSortableHeader field={field} label={label} currentField={sort} currentDir={dir} />
+    );
+
     const base: ColumnDef<EmployeeRow>[] = [
       {
         accessorKey: "name",
-        header: ({ column }) => <SortableHeader column={column} label="Nome" />,
+        header: () => headerFor("name", "Nome"),
       },
       {
         accessorKey: "document",
-        header: ({ column }) => <SortableHeader column={column} label="Documento" />,
+        header: () => headerFor("document", "Documento"),
       },
       {
         id: "department",
         accessorFn: (row) => row.department?.name ?? "",
-        header: ({ column }) => <SortableHeader column={column} label="Departamento" />,
+        header: () => headerFor("department", "Departamento"),
         cell: ({ row }) => row.original.department?.name ?? "—",
       },
       {
         id: "position",
         accessorFn: (row) => row.position?.name ?? "",
-        header: ({ column }) => <SortableHeader column={column} label="Cargo" />,
+        header: () => headerFor("position", "Cargo"),
         cell: ({ row }) => row.original.position?.name ?? "—",
       },
       {
         id: "status",
         accessorFn: (row) => row.status,
-        header: ({ column }) => <SortableHeader column={column} label="Status" />,
+        header: () => headerFor("status", "Status"),
         cell: ({ row }) => (
           <Badge variant={row.original.status === "ACTIVE" ? "default" : "outline"}>
             {row.original.status === "ACTIVE" ? "Ativo" : "Inativo"}
@@ -107,13 +109,20 @@ export function EmployeesTable({
       cell: ({ row }) => (
         <div className="flex justify-end">
           <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button variant="ghost" size="icon-sm" aria-label="Ações">
-                  <MoreHorizontalIcon className="size-4" />
-                </Button>
-              }
-            />
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <DropdownMenuTrigger
+                    render={
+                      <Button variant="ghost" size="icon-sm" aria-label="Ações">
+                        <MoreHorizontalIcon className="size-4" />
+                      </Button>
+                    }
+                  />
+                }
+              />
+              <TooltipContent>Ações</TooltipContent>
+            </Tooltip>
             <DropdownMenuContent align="end">
               <DropdownMenuItem render={<Link href={`/employees/${row.original.id}/edit`} />}>
                 Editar
@@ -131,17 +140,12 @@ export function EmployeesTable({
     });
 
     return base;
-  }, [canManage]);
-
-  const [sorting, setSorting] = useState<SortingState>([]);
+  }, [canManage, sort, dir]);
 
   const table = useReactTable({
-    data: filtered,
+    data: initialEmployees,
     columns,
-    state: { sorting },
-    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
   });
 
   async function handleDeleteConfirm() {
@@ -166,15 +170,7 @@ export function EmployeesTable({
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="relative w-full max-w-xs">
-          <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Buscar por nome ou documento..."
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="pl-8"
-          />
-        </div>
+        <DebouncedSearchInput placeholder="Buscar por nome ou documento..." className="w-full max-w-xs" />
         {canManage ? (
           <Button render={<Link href="/employees/new" />}>
             <PlusIcon />
@@ -214,11 +210,11 @@ export function EmployeesTable({
                 <TableCell colSpan={columns.length} className="h-32 text-center">
                   <div className="grid justify-items-center gap-2 text-muted-foreground">
                     <p>
-                      {initialEmployees.length
+                      {hasActiveFilters
                         ? "Nenhum colaborador encontrado para a busca."
                         : "Nenhum colaborador cadastrado ainda."}
                     </p>
-                    {canManage && !initialEmployees.length ? (
+                    {canManage && !hasActiveFilters ? (
                       <Button size="sm" render={<Link href="/employees/new" />}>
                         <PlusIcon />
                         Cadastrar o primeiro colaborador
@@ -231,6 +227,8 @@ export function EmployeesTable({
           </TableBody>
         </Table>
       </div>
+
+      <PaginationBar page={page} pageSize={pageSize} total={total} />
 
       <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>

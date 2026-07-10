@@ -5,6 +5,8 @@ import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
 import { handleApiError, ValidationError } from "@/lib/api-errors";
+import { logAudit } from "@/lib/audit";
+import { invalidateCompanyData } from "@/lib/cache";
 import { custodyDeliverInputSchema } from "@/lib/validations/custody";
 import { assertAssetBelongsToCompany, getMovementType } from "@/lib/stock";
 import { normalizeWhatsAppPhone, sendWhatsAppMessage } from "@/lib/evolution-api";
@@ -106,6 +108,15 @@ export async function POST(request: Request) {
           select: {
             name: true,
             document: true,
+            tradeName: true,
+            address: true,
+            city: true,
+            state: true,
+            zipCode: true,
+            phone: true,
+            email: true,
+            responsibleName: true,
+            logoDataUrl: true,
             whatsappApiUrl: true,
             whatsappApiKey: true,
             whatsappInstanceName: true,
@@ -199,6 +210,16 @@ export async function POST(request: Request) {
           signatureRequestToken = signatureRequest.token;
         }
 
+        await logAudit(tx, {
+          companyId,
+          actorUserId: user.id,
+          actorName: user.name,
+          action: "custody.deliver",
+          targetType: "AssetCustody",
+          targetId: created.id,
+          metadata: { employeeId: employee.id, assetId: asset.id, quantity: input.quantity },
+        });
+
         return { custody: created, signatureRequestToken };
       });
 
@@ -209,6 +230,8 @@ export async function POST(request: Request) {
         employeeName: employee.name,
         assetName: asset.name,
       });
+
+      invalidateCompanyData(companyId, ["dashboard", "stock"]);
 
       return NextResponse.json(
         {
@@ -302,6 +325,16 @@ export async function POST(request: Request) {
         signatureRequestToken = signatureRequest.token;
       }
 
+      await logAudit(tx, {
+        companyId,
+        actorUserId: user.id,
+        actorName: user.name,
+        action: "custody.deliver",
+        targetType: "AssetCustody",
+        targetId: created.id,
+        metadata: { employeeId: employee.id, assetId: asset.id, assetUnitId: unit.id },
+      });
+
       return { custody: created, signatureRequestToken };
     });
 
@@ -312,6 +345,8 @@ export async function POST(request: Request) {
       employeeName: employee.name,
       assetName: asset.name,
     });
+
+    invalidateCompanyData(companyId, ["dashboard", "stock"]);
 
     return NextResponse.json(
       {

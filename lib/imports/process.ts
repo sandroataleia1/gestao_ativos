@@ -1,10 +1,12 @@
 import type { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ValidationError } from "@/lib/api-errors";
+import { getMovementType } from "@/lib/stock";
 import { readWorkbookRows, type WorkbookRow } from "@/lib/excel";
 import { processEmployeeRow } from "@/lib/imports/employees";
 import { processAssetRow } from "@/lib/imports/assets";
 import { processStockRow } from "@/lib/imports/stock";
+import { createImportLookupCache, type ImportLookupCache, type NamedLookup } from "@/lib/imports/lookups";
 import { summarize, type ImportEntityType, type ImportResult, type ImportRowResult } from "@/lib/imports/types";
 
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
@@ -47,21 +49,76 @@ export async function parseImportFormData(
   return { type: type as ImportEntityType, buffer: Buffer.from(arrayBuffer) };
 }
 
+// Dados de apoio (status/condição de ativo, tipo de movimentação) e o cache
+// de find-or-create por nome são resolvidos UMA vez por importação inteira
+// (não por linha) e reaproveitados por todas as linhas — ver
+// lib/imports/lookups.ts para a justificativa do cache. Somem o N+1 de
+// leitura que existia antes (2 findMany repetidos a cada linha de
+// ativos/estoque).
+type ImportRunContext = {
+  lookupCache: ImportLookupCache;
+  statuses: NamedLookup[];
+  conditions: NamedLookup[];
+  movementType: { id: string } | null;
+  movementTypeError: string | null;
+};
+
+async function buildImportRunContext(
+  type: ImportEntityType,
+  companyId: string,
+): Promise<ImportRunContext> {
+  const lookupCache = createImportLookupCache();
+
+  if (type !== "assets" && type !== "stock") {
+    return { lookupCache, statuses: [], conditions: [], movementType: null, movementTypeError: null };
+  }
+
+  const [statuses, conditions] = await Promise.all([
+    prisma.assetStatus.findMany({ where: { companyId, active: true }, select: { id: true, name: true } }),
+    prisma.assetCondition.findMany({ where: { companyId, active: true }, select: { id: true, name: true } }),
+  ]);
+
+  let movementType: { id: string } | null = null;
+  let movementTypeError: string | null = null;
+  if (type === "stock") {
+    try {
+      movementType = await getMovementType(companyId, "ENTRY");
+    } catch (error) {
+      if (error instanceof ValidationError) movementTypeError = error.message;
+      else throw error;
+    }
+  }
+
+  return { lookupCache, statuses, conditions, movementType, movementTypeError };
+}
+
 function runRow(
   tx: Prisma.TransactionClient,
   type: ImportEntityType,
   companyId: string,
   userId: string,
   row: WorkbookRow,
+  context: ImportRunContext,
   dryRun: boolean,
 ): Promise<ImportRowResult> {
   switch (type) {
     case "employees":
-      return processEmployeeRow(tx, companyId, row, dryRun);
+      return processEmployeeRow(tx, companyId, row, context.lookupCache, dryRun);
     case "assets":
-      return processAssetRow(tx, companyId, row, dryRun);
+      return processAssetRow(tx, companyId, row, context.lookupCache, context.statuses, context.conditions, dryRun);
     case "stock":
-      return processStockRow(tx, companyId, userId, row, dryRun);
+      return processStockRow(
+        tx,
+        companyId,
+        userId,
+        row,
+        context.lookupCache,
+        context.statuses,
+        context.conditions,
+        context.movementType,
+        context.movementTypeError,
+        dryRun,
+      );
   }
 }
 
@@ -86,15 +143,16 @@ export async function processImportFile(params: {
 }): Promise<ImportResult> {
   const { type, buffer, companyId, userId, dryRun } = params;
   const workbookRows = await readWorkbookRows(buffer);
+  const context = await buildImportRunContext(type, companyId);
 
   const results: ImportRowResult[] = [];
   for (const row of workbookRows) {
     try {
       if (dryRun) {
-        results.push(await runRow(prisma, type, companyId, userId, row, true));
+        results.push(await runRow(prisma, type, companyId, userId, row, context, true));
       } else {
         results.push(
-          await prisma.$transaction((tx) => runRow(tx, type, companyId, userId, row, false)),
+          await prisma.$transaction((tx) => runRow(tx, type, companyId, userId, row, context, false)),
         );
       }
     } catch (error) {

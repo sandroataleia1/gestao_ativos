@@ -4,10 +4,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { cn } from "@/lib/utils";
-import { NAV_GROUPS } from "./nav-items";
+import { getActiveNavHref, NAV_GROUPS } from "./nav-items";
 
 export function Sidebar() {
   const pathname = usePathname();
+  const activeHref = getActiveNavHref(pathname);
 
   return (
     // Azul (mesmo tom da tela de login) só no tema claro — no escuro, a
@@ -26,14 +27,15 @@ export function Sidebar() {
               {group.label}
             </span>
             {group.items.map((item) => {
-              const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
+              const isActive = item.href === activeHref;
               const Icon = item.icon;
               return (
                 <Link
                   key={item.href}
                   href={item.href}
+                  aria-current={isActive ? "page" : undefined}
                   className={cn(
-                    "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-blue-100/70 transition-colors hover:bg-white/10 hover:text-white dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground",
+                    "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-blue-100/70 transition-colors hover:bg-white/10 hover:text-white focus-visible:ring-3 focus-visible:ring-white/50 focus-visible:outline-none dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground dark:focus-visible:ring-ring/50",
                     isActive &&
                       "bg-white/10 text-white hover:bg-white/15 hover:text-white dark:bg-primary/10 dark:text-primary dark:hover:bg-primary/15 dark:hover:text-primary",
                   )}

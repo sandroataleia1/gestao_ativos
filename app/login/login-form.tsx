@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   AlertCircleIcon,
   EyeIcon,
@@ -119,6 +120,9 @@ export function LoginForm() {
       <div className="grid gap-2">
         <div className="flex items-center justify-between">
           <Label htmlFor="password">Senha</Label>
+          <Link href="/esqueci-senha" className="text-sm text-muted-foreground underline underline-offset-4">
+            Esqueceu a senha?
+          </Link>
         </div>
         <div className="relative">
           <LockIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />

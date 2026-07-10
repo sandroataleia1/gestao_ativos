@@ -98,6 +98,59 @@ export const custodyListInclude = {
   },
 } as const;
 
+export const CUSTODY_TABS = ["active", "history", "overdue"] as const;
+export type CustodyTab = (typeof CUSTODY_TABS)[number];
+
+function buildCustodyWhereForTab(companyId: string, tab: CustodyTab): Prisma.AssetCustodyWhereInput {
+  if (tab === "active") return { companyId, status: "ACTIVE" };
+  // "overdue" usa o índice composto (companyId, status, expectedReturnAt) —
+  // ver prisma/schema.prisma.
+  if (tab === "overdue") return { companyId, status: "ACTIVE", expectedReturnAt: { lt: new Date() } };
+  // "history" = linha do tempo completa (ativas + devolvidas), igual ao
+  // comportamento anterior (só trocava o `take: 500` hard-coded).
+  return { companyId };
+}
+
+export type CustodiesPageParams = {
+  tab: CustodyTab;
+  page: number;
+  pageSize: number;
+  search?: string;
+};
+
+/** Busca paginada por aba — substitui o `take: undefined` (aba "ativa", sem
+ * NENHUM limite antes) e o `take: 500` hard-coded (aba "histórico"). A aba
+ * "atrasadas" agora é uma consulta própria no banco (antes era um filtro em
+ * memória sobre o array inteiro da aba ativa, o que ficava incorreto assim
+ * que essa aba passou a paginar). */
+export async function getCustodiesPage(companyId: string, params: CustodiesPageParams) {
+  const { tab, page, pageSize, search } = params;
+  const baseWhere = buildCustodyWhereForTab(companyId, tab);
+  const where: Prisma.AssetCustodyWhereInput = search
+    ? {
+        ...baseWhere,
+        OR: [
+          { employee: { name: { contains: search, mode: "insensitive" } } },
+          { asset: { name: { contains: search, mode: "insensitive" } } },
+          { asset: { assetCode: { contains: search, mode: "insensitive" } } },
+        ],
+      }
+    : baseWhere;
+
+  const [rows, total] = await prisma.$transaction([
+    prisma.assetCustody.findMany({
+      where,
+      include: custodyListInclude,
+      orderBy: { deliveredAt: "desc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    prisma.assetCustody.count({ where }),
+  ]);
+
+  return { rows, total };
+}
+
 export function serializeCustody<T extends { quantity: unknown }>(custody: T) {
   return { ...custody, quantity: toNumber(custody.quantity) };
 }
@@ -175,7 +228,19 @@ type CustodyForTerm = {
   holderLocation: { name: string };
 };
 
-type CompanyForTerm = { name: string; document: string | null };
+type CompanyForTerm = {
+  name: string;
+  document: string | null;
+  tradeName?: string | null;
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zipCode?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  responsibleName?: string | null;
+  logoDataUrl?: string | null;
+};
 
 const RESPONSIBILITIES_HTML = `
   <ul>
@@ -186,6 +251,12 @@ const RESPONSIBILITIES_HTML = `
     <li>Responder, nos termos da legislação aplicável, por danos causados por uso indevido ou negligência.</li>
   </ul>
 `;
+
+function describeCompanyAddress(company: CompanyForTerm): string | null {
+  const cityState = [company.city, company.state].filter(Boolean).join(" - ");
+  const parts = [company.address, cityState, company.zipCode].filter(Boolean);
+  return parts.length ? escapeHtml(parts.join(", ")) : null;
+}
 
 function describeCustodyItem(custody: CustodyForTerm) {
   const assetLabel = `${escapeHtml(custody.asset.name)} (${escapeHtml(custody.asset.assetCode)})`;
@@ -220,10 +291,27 @@ export function buildCustodyTermHtml(
           : "")
       : `<p><strong>Data da devolução:</strong> ${formatTermDate(custody.returnedAt)}</p>`;
 
+  const companyDisplayName = escapeHtml(company.tradeName || company.name);
+  const companyAddress = describeCompanyAddress(company);
+  const companyContact = [
+    company.phone ? `Tel.: ${escapeHtml(company.phone)}` : null,
+    company.email ? escapeHtml(company.email) : null,
+  ]
+    .filter(Boolean)
+    .join(" — ");
+  const logoHtml =
+    company.logoDataUrl && company.logoDataUrl.startsWith("data:image/")
+      ? `<img src="${company.logoDataUrl}" alt="" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:8px;" />`
+      : "";
+
   return `
 <div class="custody-term">
+  ${logoHtml}
   <h1>${title}</h1>
-  <p><strong>Empresa:</strong> ${escapeHtml(company.name)}${company.document ? ` — ${escapeHtml(company.document)}` : ""}</p>
+  <p><strong>Empresa:</strong> ${companyDisplayName}${company.document ? ` — ${escapeHtml(company.document)}` : ""}</p>
+  ${companyAddress ? `<p><strong>Endereço:</strong> ${companyAddress}</p>` : ""}
+  ${companyContact ? `<p>${companyContact}</p>` : ""}
+  ${company.responsibleName ? `<p><strong>Responsável:</strong> ${escapeHtml(company.responsibleName)}</p>` : ""}
   <p><strong>Colaborador:</strong> ${escapeHtml(custody.employee.name)} — ${escapeHtml(custody.employee.document)}</p>
   <p><strong>Item:</strong> ${describeCustodyItem(custody)}</p>
   <p><strong>Local:</strong> ${escapeHtml(custody.holderLocation.name)}</p>

@@ -5,6 +5,7 @@ import { requirePermission } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
 import { handleApiError } from "@/lib/api-errors";
 import { assetCategoryInputSchema } from "@/lib/validations/asset-lookups";
+import { invalidateCompanyData } from "@/lib/cache";
 
 export async function GET() {
   try {
@@ -30,6 +31,7 @@ export async function POST(request: Request) {
 
     const category = await prisma.assetCategory.create({ data: { ...input, companyId } });
 
+    invalidateCompanyData(companyId, ["reports-lookups"]);
     return NextResponse.json({ category }, { status: 201 });
   } catch (error) {
     return handleApiError(error);

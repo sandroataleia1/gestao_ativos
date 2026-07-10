@@ -1,50 +1,77 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PlusIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { QrCodeDialog } from "@/components/qr/qr-code-dialog";
-import { isCustodyOverdue } from "@/lib/custodies/badge";
+import type { CustodyTab } from "@/lib/custodies";
 import { CustodyDocumentsDialog } from "./custody-documents-dialog";
 import { CustodyTable } from "./custody-table";
 import { ReturnDialog } from "./return-dialog";
 import type { CustodyRow, LookupOption } from "./types";
 
+const TAB_EMPTY_MESSAGE: Record<CustodyTab, string> = {
+  active: "Nenhuma custódia ativa.",
+  history: "Nenhuma custódia registrada.",
+  overdue: "Nenhuma devolução pendente.",
+};
+
+/** Cada aba busca sua própria página no servidor (troca de aba = navegação
+ * com `?tab=`, mesmo padrão de app/(app)/reports/reports-view.tsx) — só a
+ * aba ativa é buscada/renderizada por vez, em vez de carregar as três de
+ * uma vez (a aba "ativa" antes não tinha NENHUM limite de linhas). */
 export function CustodiesTabs({
-  initialActive,
-  initialHistory,
+  tab,
+  rows,
+  total,
+  page,
+  pageSize,
+  overdueCount,
   conditions,
   canManage,
 }: {
-  initialActive: CustodyRow[];
-  initialHistory: CustodyRow[];
+  tab: CustodyTab;
+  rows: CustodyRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  overdueCount: number;
   conditions: LookupOption[];
   canManage: boolean;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [returnTarget, setReturnTarget] = useState<CustodyRow | null>(null);
   const [documentsTarget, setDocumentsTarget] = useState<CustodyRow | null>(null);
   const [qrTarget, setQrTarget] = useState<CustodyRow | null>(null);
-
-  const overdue = useMemo(() => initialActive.filter(isCustodyOverdue), [initialActive]);
 
   function refresh() {
     setReturnTarget(null);
     router.refresh();
   }
 
+  function changeTab(nextTab: string | null) {
+    if (!nextTab) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", nextTab);
+    params.delete("page");
+    params.delete("q");
+    router.push(`${pathname}?${params.toString()}`);
+  }
+
   return (
     <div className="grid gap-4">
-      <Tabs defaultValue="active">
+      <Tabs value={tab} onValueChange={changeTab}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <TabsList>
             <TabsTrigger value="active">Em posse do colaborador</TabsTrigger>
             <TabsTrigger value="history">Histórico</TabsTrigger>
-            <TabsTrigger value="overdue">Pendências de devolução ({overdue.length})</TabsTrigger>
+            <TabsTrigger value="overdue">Pendências de devolução ({overdueCount})</TabsTrigger>
           </TabsList>
 
           {canManage ? (
@@ -55,37 +82,19 @@ export function CustodiesTabs({
           ) : null}
         </div>
 
-        <TabsContent value="active">
-          <CustodyTable
-            rows={initialActive}
-            emptyMessage="Nenhuma custódia ativa."
-            canManage={canManage}
-            onReturn={setReturnTarget}
-            onOpenDocuments={setDocumentsTarget}
-            onOpenQr={canManage ? setQrTarget : undefined}
-            onCreateNew={canManage ? () => router.push("/custodies/new") : undefined}
-          />
-        </TabsContent>
-        <TabsContent value="history">
-          <CustodyTable
-            rows={initialHistory}
-            emptyMessage="Nenhuma custódia registrada."
-            canManage={false}
-            showStatus
-            onOpenDocuments={setDocumentsTarget}
-            onOpenQr={canManage ? setQrTarget : undefined}
-          />
-        </TabsContent>
-        <TabsContent value="overdue">
-          <CustodyTable
-            rows={overdue}
-            emptyMessage="Nenhuma devolução pendente."
-            canManage={canManage}
-            onReturn={setReturnTarget}
-            onOpenDocuments={setDocumentsTarget}
-            onOpenQr={canManage ? setQrTarget : undefined}
-          />
-        </TabsContent>
+        <CustodyTable
+          rows={rows}
+          total={total}
+          page={page}
+          pageSize={pageSize}
+          emptyMessage={TAB_EMPTY_MESSAGE[tab]}
+          canManage={tab !== "history" && canManage}
+          showStatus={tab === "history"}
+          onReturn={tab !== "history" ? setReturnTarget : undefined}
+          onOpenDocuments={setDocumentsTarget}
+          onOpenQr={canManage ? setQrTarget : undefined}
+          onCreateNew={tab === "active" && canManage ? () => router.push("/custodies/new") : undefined}
+        />
       </Tabs>
 
       {canManage ? (

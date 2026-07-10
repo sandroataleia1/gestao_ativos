@@ -1,21 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
-import {
-  type ColumnDef,
-  type SortingState,
-  flexRender,
-  getCoreRowModel,
-  getSortedRowModel,
-  useReactTable,
-} from "@tanstack/react-table";
-import { PlusIcon, SearchIcon } from "lucide-react";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { type ColumnDef, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { PlusIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { SortableHeader } from "@/components/ui/data-table-column-header";
+import { ServerSortableHeader } from "@/components/ui/data-table-column-header";
+import { DebouncedSearchInput } from "@/components/ui/debounced-search-input";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import {
   Table,
   TableBody,
@@ -31,67 +26,89 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import type { StockSortField } from "@/lib/stock";
 import type { LookupOption, StockRow } from "./types";
 
 const ALL_VALUE = "all";
 
 export function StockTable({
   initialStock,
+  total,
+  page,
+  pageSize,
+  sort,
+  dir,
   categories,
   locations,
   canManage,
 }: {
   initialStock: StockRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  sort: StockSortField;
+  dir: "asc" | "desc";
   categories: LookupOption[];
   locations: LookupOption[];
   canManage: boolean;
 }) {
-  const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState(ALL_VALUE);
-  const [locationFilter, setLocationFilter] = useState(ALL_VALUE);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return initialStock.filter((row) => {
-      if (categoryFilter !== ALL_VALUE && row.asset.category.id !== categoryFilter) return false;
-      if (locationFilter !== ALL_VALUE && row.locationId !== locationFilter) return false;
-      if (!q) return true;
-      return (
-        row.asset.name.toLowerCase().includes(q) || row.asset.assetCode.toLowerCase().includes(q)
-      );
-    });
-  }, [initialStock, search, categoryFilter, locationFilter]);
+  function applyFilter(key: string, value: string | undefined) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (!value || value === ALL_VALUE) params.delete(key);
+    else params.set(key, value);
+    params.delete("stockPage");
+    router.push(`${pathname}?${params.toString()}`);
+  }
 
-  const columns = useMemo<ColumnDef<StockRow>[]>(
-    () => [
+  const hasActiveFilters = Boolean(
+    searchParams.get("stockQ") || searchParams.get("stockCategoryId") || searchParams.get("stockLocationId"),
+  );
+
+  const columns = useMemo<ColumnDef<StockRow>[]>(() => {
+    const headerFor = (field: StockSortField, label: string) => (
+      <ServerSortableHeader
+        field={field}
+        label={label}
+        currentField={sort}
+        currentDir={dir}
+        paramPrefix="stock"
+        pageParamKey="stockPage"
+      />
+    );
+
+    return [
       {
         id: "asset",
         accessorFn: (row) => row.asset.name,
-        header: ({ column }) => <SortableHeader column={column} label="Ativo" />,
+        header: () => headerFor("asset", "Ativo"),
         cell: ({ row }) => row.original.asset.name,
       },
       {
         id: "code",
         accessorFn: (row) => row.asset.assetCode,
-        header: ({ column }) => <SortableHeader column={column} label="Código" />,
+        header: () => headerFor("code", "Código"),
         cell: ({ row }) => row.original.asset.assetCode,
       },
       {
         id: "category",
         accessorFn: (row) => row.asset.category.name,
-        header: ({ column }) => <SortableHeader column={column} label="Categoria" />,
+        header: () => headerFor("category", "Categoria"),
         cell: ({ row }) => row.original.asset.category.name,
       },
       {
         id: "location",
         accessorFn: (row) => row.location.name,
-        header: ({ column }) => <SortableHeader column={column} label="Local" />,
+        header: () => headerFor("location", "Local"),
         cell: ({ row }) => row.original.location.name,
       },
       {
         id: "trackingMode",
         accessorFn: (row) => row.asset.trackingMode,
-        header: ({ column }) => <SortableHeader column={column} label="Controle" />,
+        header: () => headerFor("trackingMode", "Controle"),
         cell: ({ row }) => (
           <Badge variant="outline">
             {row.original.asset.trackingMode === "INDIVIDUAL" ? "Série" : "Quantidade"}
@@ -101,7 +118,7 @@ export function StockTable({
       {
         id: "quantity",
         accessorFn: (row) => row.quantity,
-        header: ({ column }) => <SortableHeader column={column} label="Saldo" />,
+        header: () => headerFor("quantity", "Saldo"),
         cell: ({ row }) => (
           <span className="font-medium">
             {row.original.quantity}
@@ -109,42 +126,33 @@ export function StockTable({
           </span>
         ),
       },
-    ],
-    [],
-  );
-
-  const [sorting, setSorting] = useState<SortingState>([]);
+    ];
+  }, [sort, dir]);
 
   const table = useReactTable({
-    data: filtered,
+    data: initialStock,
     columns,
-    state: { sorting },
-    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
   });
 
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative w-full max-w-xs">
-            <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder="Buscar por nome ou código..."
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              className="w-64 pl-8"
-            />
-          </div>
+          <DebouncedSearchInput
+            paramKey="stockQ"
+            pageParamKey="stockPage"
+            placeholder="Buscar por nome ou código..."
+            className="w-64"
+          />
 
           <Select
             items={{
               [ALL_VALUE]: "Todas as categorias",
               ...Object.fromEntries(categories.map((c) => [c.id, c.name])),
             }}
-            value={categoryFilter}
-            onValueChange={(value) => setCategoryFilter(value ?? ALL_VALUE)}
+            value={searchParams.get("stockCategoryId") ?? ALL_VALUE}
+            onValueChange={(value) => applyFilter("stockCategoryId", value as string)}
           >
             <SelectTrigger size="sm">
               <SelectValue placeholder="Categoria" />
@@ -164,8 +172,8 @@ export function StockTable({
               [ALL_VALUE]: "Todos os locais",
               ...Object.fromEntries(locations.map((l) => [l.id, l.name])),
             }}
-            value={locationFilter}
-            onValueChange={(value) => setLocationFilter(value ?? ALL_VALUE)}
+            value={searchParams.get("stockLocationId") ?? ALL_VALUE}
+            onValueChange={(value) => applyFilter("stockLocationId", value as string)}
           >
             <SelectTrigger size="sm">
               <SelectValue placeholder="Local" />
@@ -220,11 +228,11 @@ export function StockTable({
                 <TableCell colSpan={columns.length} className="h-32 text-center">
                   <div className="grid justify-items-center gap-2 text-muted-foreground">
                     <p>
-                      {initialStock.length
+                      {hasActiveFilters
                         ? "Nenhum saldo encontrado para os filtros aplicados."
                         : "Nenhum saldo de estoque registrado ainda."}
                     </p>
-                    {canManage && !initialStock.length ? (
+                    {canManage && !hasActiveFilters ? (
                       <Button size="sm" render={<Link href="/stock/new" />}>
                         <PlusIcon />
                         Lançar a primeira entrada
@@ -237,6 +245,8 @@ export function StockTable({
           </TableBody>
         </Table>
       </div>
+
+      <PaginationBar page={page} pageSize={pageSize} total={total} paramKey="stockPage" />
     </div>
   );
 }

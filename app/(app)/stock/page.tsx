@@ -4,7 +4,9 @@ import { BoxesIcon, MapPinIcon, PackageIcon, ScanBarcodeIcon } from "lucide-reac
 import { prisma } from "@/lib/prisma";
 import { hasPermission, requirePermissionOrDeny } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
-import { getStockMovements, getStockRows } from "@/lib/stock";
+import { STOCK_SORT_FIELDS, getStockRowsPage, getStockMovementsPage } from "@/lib/stock";
+import { getCachedStockSummary } from "@/lib/cache";
+import { parsePageParams, parseSearchParam, parseSortParams, type SearchParamsInput } from "@/lib/pagination";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StockTable } from "./stock-table";
 import { StockMovementsTable } from "./stock-movements-table";
@@ -13,13 +15,62 @@ export const metadata: Metadata = {
   title: "Estoque — Gestão de Ativos",
 };
 
-export default async function StockPage() {
+export default async function StockPage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParamsInput>;
+}) {
   const { companyId } = await requirePermissionOrDeny(PERMISSIONS.STOCK_VIEW);
   const canManage = await hasPermission(PERMISSIONS.STOCK_MANAGE);
+  const resolvedSearchParams = await searchParams;
 
-  const [stock, movements, assets, categories, locations, movementTypes] = await Promise.all([
-    getStockRows(companyId),
-    getStockMovements(companyId),
+  const { page: stockPage, pageSize: stockPageSize } = parsePageParams(resolvedSearchParams, {
+    prefix: "stock",
+  });
+  const stockSearch = parseSearchParam(resolvedSearchParams, "stockQ");
+  const { field: stockSort, dir: stockDir } = parseSortParams(
+    resolvedSearchParams,
+    STOCK_SORT_FIELDS,
+    "asset",
+    "asc",
+    "stock",
+  );
+  const stockCategoryId = resolvedSearchParams.stockCategoryId as string | undefined;
+  const stockLocationId = resolvedSearchParams.stockLocationId as string | undefined;
+
+  const { page: movPage, pageSize: movPageSize } = parsePageParams(resolvedSearchParams, {
+    prefix: "mov",
+  });
+  const movAssetId = resolvedSearchParams.movAssetId as string | undefined;
+  const movLocationId = resolvedSearchParams.movLocationId as string | undefined;
+  const movTypeId = resolvedSearchParams.movTypeId as string | undefined;
+
+  const [
+    { rows: stock, total: stockTotal },
+    { rows: movements, total: movTotal },
+    summary,
+    assets,
+    categories,
+    locations,
+    movementTypes,
+  ] = await Promise.all([
+    getStockRowsPage(companyId, {
+      page: stockPage,
+      pageSize: stockPageSize,
+      search: stockSearch || undefined,
+      sort: stockSort,
+      dir: stockDir,
+      categoryId: stockCategoryId,
+      locationId: stockLocationId,
+    }),
+    getStockMovementsPage(companyId, {
+      page: movPage,
+      pageSize: movPageSize,
+      assetId: movAssetId,
+      locationId: movLocationId,
+      movementTypeId: movTypeId,
+    }),
+    getCachedStockSummary(companyId),
     prisma.asset.findMany({
       where: { companyId, active: true },
       select: {
@@ -48,14 +99,7 @@ export default async function StockPage() {
     }),
   ]);
 
-  const distinctAssets = new Set(stock.map((row) => row.assetId)).size;
-  const distinctLocations = new Set(stock.map((row) => row.locationId)).size;
-  const consumableQuantity = stock
-    .filter((row) => row.asset.trackingMode === "CONSUMABLE")
-    .reduce((sum, row) => sum + row.quantity, 0);
-  const individualUnits = stock
-    .filter((row) => row.asset.trackingMode === "INDIVIDUAL")
-    .reduce((sum, row) => sum + row.quantity, 0);
+  const { distinctAssets, distinctLocations, consumableQuantity, individualUnits } = summary;
 
   const summaryCards = [
     { label: "Ativos em estoque", value: distinctAssets, icon: PackageIcon },
@@ -91,6 +135,11 @@ export default async function StockPage() {
 
       <StockTable
         initialStock={stock}
+        total={stockTotal}
+        page={stockPage}
+        pageSize={stockPageSize}
+        sort={stockSort}
+        dir={stockDir}
         categories={categories}
         locations={locations}
         canManage={canManage}
@@ -98,9 +147,13 @@ export default async function StockPage() {
 
       <StockMovementsTable
         initialMovements={movements.map((m) => ({ ...m, executedAt: m.executedAt.toISOString() }))}
+        total={movTotal}
+        page={movPage}
+        pageSize={movPageSize}
         assets={assets}
         locations={locations}
         movementTypes={movementTypes}
+        canManage={canManage}
       />
     </div>
   );

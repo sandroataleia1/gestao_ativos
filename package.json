@@ -9,12 +9,20 @@
     "lint": "eslint",
     "postinstall": "prisma generate",
     "db:seed": "prisma db seed",
-    "db:reset-demo": "tsx prisma/reset-demo.ts && prisma db seed"
+    "db:seed:bulk": "tsx prisma/seed-bulk.ts",
+    "db:reset-demo": "tsx prisma/reset-demo.ts && prisma db seed",
+    "diagnose:documents": "tsx scripts/diagnose-company-documents.ts",
+    "diagnose:pre-m2": "tsx scripts/diagnose-pre-m2.ts",
+    "backfill:company-memberships": "tsx scripts/backfill-company-memberships.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
+    "@sentry/node": "^10.64.0",
     "@tanstack/react-table": "^8.21.3",
     "better-auth": "^1.6.23",
     "class-variance-authority": "^0.7.1",
@@ -23,7 +31,10 @@
     "lucide-react": "^1.23.0",
     "next": "16.2.9",
     "next-themes": "^0.4.6",
+    "nodemailer": "^9.0.3",
     "pg": "^8.22.0",
+    "pino": "^10.3.1",
+    "prom-client": "^15.1.3",
     "qrcode.react": "^4.2.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
@@ -36,6 +47,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
@@ -45,6 +57,7 @@
     "prisma": "^7.8.0",
     "tailwindcss": "^4",
     "tsx": "^4.22.4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.10"
   }
 }

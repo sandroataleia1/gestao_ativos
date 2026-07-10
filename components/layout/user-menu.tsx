@@ -38,7 +38,7 @@ export function UserMenu({ name, email }: { name: string; email: string }) {
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
-          <Button variant="ghost" className="h-auto gap-2 px-2 py-1.5">
+          <Button variant="ghost" className="h-auto gap-2 px-2 py-1.5" aria-label={`Menu de ${name}`}>
             <Avatar size="sm">
               <AvatarFallback>{initialsFor(name)}</AvatarFallback>
             </Avatar>

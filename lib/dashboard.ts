@@ -1,28 +1,43 @@
+import { cache } from "react";
+
 import { prisma } from "@/lib/prisma";
-import { getStockRows, toNumber } from "@/lib/stock";
+import { getStockSummary, toNumber } from "@/lib/stock";
 import { getCaAlerts, getCustodyOverdueAlerts, getLowStockAlerts } from "@/lib/alerts";
 
-// Agregação única do dashboard — uma só ida ao banco por métrica, sem
-// widgets independentes disparando suas próprias consultas. As três listas
-// de alerta (CA, custódia atrasada, estoque baixo) são reaproveitadas tanto
-// para o card "Alertas críticos" quanto para os indicadores operacionais,
-// em vez de recalculadas por card.
-export async function getDashboardSummary(companyId: string) {
-  const now = new Date();
+// Dividido em duas funções (em vez de uma `getDashboardSummary` só) pra
+// permitir que app/(app)/dashboard/page.tsx renderize os cards rápidos
+// (aggregate/count, já eficientes) imediatamente e só envolva em
+// `<Suspense>` a parte que depende dos 3 tipos de alerta — que é mais cara
+// (CA a vencer olha certificações, custódia atrasada olha entregas, estoque
+// baixo faz um groupBy) mesmo já otimizada. Ver docs/performance.md.
 
-  const [stockRows, custodyAggregate, activeEmployeeCount] = await Promise.all([
-    getStockRows(companyId),
+/** Cards rápidos: quantidade em posse/estoque — 2 queries aggregate/count,
+ * nada que dependa de calcular alertas. */
+export async function getDashboardFastSummary(companyId: string) {
+  const [stockSummary, custodyAggregate] = await Promise.all([
+    getStockSummary(companyId),
     prisma.assetCustody.aggregate({
       where: { companyId, status: "ACTIVE" },
       _sum: { quantity: true },
     }),
-    prisma.employee.count({ where: { companyId, status: "ACTIVE" } }),
   ]);
 
+  return {
+    inPossessionQuantity: toNumber(custodyAggregate._sum.quantity ?? 0),
+    inStockQuantity: stockSummary.consumableQuantity + stockSummary.individualUnits,
+  };
+}
+
+/** Parte cara do dashboard (os 3 tipos de alerta) — `cache()` garante que,
+ * mesmo se mais de um Server Component pedir isso na mesma requisição (ex.:
+ * o card de alertas críticos e o de indicadores operacionais), as consultas
+ * rodam uma única vez. */
+export const getDashboardAlertsSummary = cache(async (companyId: string) => {
+  const now = new Date();
   const [caAlerts, custodyOverdueAlerts, lowStockAlerts] = await Promise.all([
     getCaAlerts(companyId, now),
     getCustodyOverdueAlerts(companyId, now),
-    getLowStockAlerts(companyId, now, stockRows),
+    getLowStockAlerts(companyId, now),
   ]);
 
   const criticalAlerts = [...caAlerts, ...custodyOverdueAlerts, ...lowStockAlerts].filter(
@@ -30,8 +45,6 @@ export async function getDashboardSummary(companyId: string) {
   );
 
   return {
-    inPossessionQuantity: toNumber(custodyAggregate._sum.quantity ?? 0),
-    inStockQuantity: stockRows.reduce((sum, row) => sum + row.quantity, 0),
     criticalAlerts,
     // Lista completa (WARNING + CRITICAL) das entregas atrasadas — diferente
     // de `criticalAlerts`, que só pega severidade CRITICAL (atraso > 7 dias)
@@ -43,9 +56,8 @@ export async function getDashboardSummary(companyId: string) {
     caExpiredCount: caAlerts.filter((alert) => alert.type === "CA_EXPIRED").length,
     overdueCustodyCount: custodyOverdueAlerts.length,
     lowStockCount: lowStockAlerts.length,
-    activeEmployeeCount,
   };
-}
+});
 
 const MOVEMENT_TYPE_LABELS: Record<string, string> = {
   ENTRY: "Entrada de estoque",

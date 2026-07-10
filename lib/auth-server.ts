@@ -33,7 +33,12 @@ export const getSession = cache(async () => {
 
 export async function getCurrentUser() {
   const session = await getSession();
-  return session?.user ?? null;
+  const user = session?.user ?? null;
+  // Usuário bloqueado (ver app/(app)/configuracoes/usuarios) perde acesso a
+  // partir da próxima requisição — tratado como se não houvesse sessão,
+  // sem precisar revogar a sessão manualmente em cada bloqueio.
+  if (user && (user as { active?: boolean }).active === false) return null;
+  return user;
 }
 
 /**

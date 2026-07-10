@@ -1,0 +1,88 @@
+// ============================================================================
+// PROPOSTA de alteração de schema para a Migration M1 — NÃO APLICADA.
+// (Revisão 2 — corrigida após aprovação parcial da Sprint 0.2: enums e
+// política de deleção ajustados para o ADR-001 aprovado.)
+//
+// Este arquivo é apenas o DIFF proposto para `prisma/schema.prisma`. Ele NÃO é
+// lido pelo Prisma (o generator/migrate usa só `prisma/schema.prisma`). Serve
+// para revisão do que muda no model Company e no model SstProvider.
+//
+// Ver M1_add_company_lifecycle_fields.sql (SQL exato) e README.md (política de
+// deleção) nesta mesma pasta.
+// ============================================================================
+
+// (1) NOVOS ENUMS — adicionar antes de `model Company`.
+
+enum CompanyOperationalStatus {
+  ACTIVE     // operando normalmente (default de toda empresa existente)
+  SUSPENDED  // acesso temporariamente bloqueado, dado preservado
+  CLOSED     // encerrada (contrato terminado) — dado preservado, acesso negado
+}
+
+// Estado de CONTROLE da empresa (quem detém a conta) — distinto de `origin`
+// (como/por quem ela nasceu). Pré-cadastro é uma ORIGEM (ver CompanyOrigin),
+// não um estado de controle: uma empresa pré-cadastrada por consultoria
+// nasce UNCLAIMED, não "PRE_REGISTERED".
+enum CompanyControlStatus {
+  UNCLAIMED     // ninguém do lado da empresa ainda assumiu a conta (ex.: pré-cadastrada por consultoria/import, sem usuário próprio ainda)
+  CLAIM_PENDING // um pedido de reivindicação foi aberto e aguarda aprovação (FUTURO — CompanyClaimRequest)
+  CLAIMED       // controlada pelo próprio representante da empresa (default hoje — todo registro existente já está aqui)
+  DISPUTED      // mais de uma reivindicação concorrente em aberto para a mesma empresa (FUTURO)
+}
+
+// Como a Company nasceu — independente de quem a controla hoje.
+enum CompanyOrigin {
+  SELF_REGISTRATION // criada via /register pela própria empresa (default hoje)
+  SST_PROVIDER       // criada por uma consultoria SST no pré-cadastro (FUTURO)
+  SUPER_ADMIN        // criada manualmente por um operador da plataforma (FUTURO)
+  IMPORT             // criada por rotina de importação em lote (FUTURO)
+}
+
+// Tipo do documento em `documentOriginal`/`documentNormalized` (preparação
+// para suportar cadastro estrangeiro no futuro; nesta migration nenhum dos
+// dois campos é preenchido).
+enum CompanyDocumentType {
+  CNPJ
+  FOREIGN_REGISTRATION
+}
+
+// (2) model Company — adicionar SOMENTE estes campos (nada é removido, renomeado
+//     ou alterado — em especial, o campo legado `document` permanece intocado):
+//
+//   active    Boolean  @default(true)
+// +
+// + // --- Ciclo de vida e proveniência (M1 — ver docs/adr/ADR-001) ---
+// + operationalStatus   CompanyOperationalStatus @default(ACTIVE)
+// + controlStatus       CompanyControlStatus     @default(CLAIMED)
+// + origin              CompanyOrigin            @default(SELF_REGISTRATION)
+// +
+// + // Quem criou a empresa quando ela nasce de um pré-cadastro de consultoria
+// + // (FUTURO). A empresa continua sendo a dona dos dados; isto é só
+// + // proveniência histórica. onDelete: Restrict — ver README.md: o prestador
+// + // é desativado logicamente (SstProvider.active = false), nunca apagado
+// + // fisicamente; não há hoje nenhum fluxo de hard delete de SstProvider no
+// + // repositório, então a constraint nunca bloqueia uma operação real.
+// + createdByProviderId String?
+// + createdByProvider   SstProvider? @relation("CompaniesCreatedByProvider", fields: [createdByProviderId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+// + claimedAt            DateTime?  // preenchido só quando a reivindicação (FUTURO) for concluída; permanece NULL para todo registro existente (a data histórica real é desconhecida)
+// +
+// + // Campos preparatórios para normalização futura de documento — NULLABLE e
+// + // SEM backfill nesta migration (nenhum dos três é preenchido aqui). O
+// + // campo legado `document` (acima, inalterado) continua sendo a única
+// + // fonte de verdade até uma migration futura decidir a transição.
+// + documentType        CompanyDocumentType?
+// + documentOriginal    String?
+// + documentNormalized  String?
+//
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @updatedAt
+//
+// ... e, junto aos demais @@index do model Company:
+// + @@index([createdByProviderId])
+
+// (3) model SstProvider — adicionar SOMENTE a back-relation (sem FK física
+//     nesse lado; é o inverso da relação acima):
+//
+//   companyLinks     SstProviderCompany[]
+// + createdCompanies Company[] @relation("CompaniesCreatedByProvider")
+//   companyTrainings CompanyTraining[]

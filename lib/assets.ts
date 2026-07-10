@@ -1,5 +1,7 @@
+import type { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ValidationError } from "@/lib/api-errors";
+import { buildCaStatusWhere, type CaStatusFilter } from "@/lib/certifications";
 import type { AssetInput } from "@/lib/validations/asset";
 
 /**
@@ -57,6 +59,106 @@ export const assetListInclude = {
   condition: { select: { id: true, name: true } },
   certifications: { orderBy: { createdAt: "desc" } },
 } as const;
+
+// Mesma composição de `assetListInclude`, mas com `certifications` limitado
+// — usado só na listagem paginada (getAssetsPage), onde carregar o
+// histórico inteiro de CA de cada linha da página não agrega nada ao badge
+// (computeCaBadge só olha o mais recente por tipo). `assetListInclude`
+// original continua sem limite para a tela de edição de um único ativo
+// (`app/(app)/assets/[id]/edit/page.tsx`), que precisa do histórico
+// completo.
+const assetListIncludeForPage = {
+  ...assetListInclude,
+  certifications: {
+    where: { certificationType: "CA" as const },
+    orderBy: { createdAt: "desc" },
+    take: 10,
+  },
+} as const;
+
+export const ASSET_SORT_FIELDS = [
+  "name",
+  "assetCode",
+  "category",
+  "manufacturer",
+  "status",
+  "condition",
+  "active",
+] as const;
+export type AssetSortField = (typeof ASSET_SORT_FIELDS)[number];
+
+function buildAssetOrderBy(
+  sort: AssetSortField,
+  dir: "asc" | "desc",
+): Prisma.AssetOrderByWithRelationInput {
+  switch (sort) {
+    case "assetCode":
+      return { assetCode: dir };
+    case "category":
+      return { category: { name: dir } };
+    case "manufacturer":
+      return { manufacturer: { name: dir } };
+    case "status":
+      return { status: { name: dir } };
+    case "condition":
+      return { condition: { name: dir } };
+    case "active":
+      return { active: dir };
+    default:
+      return { name: dir };
+  }
+}
+
+export type AssetsPageParams = {
+  page: number;
+  pageSize: number;
+  search?: string;
+  categoryId?: string;
+  statusId?: string;
+  conditionId?: string;
+  caStatus?: CaStatusFilter;
+  sort: AssetSortField;
+  dir: "asc" | "desc";
+};
+
+/** Busca paginada/filtrada/ordenada no servidor — substitui o
+ * `findMany` sem `take`/`skip` que carregava todos os ativos da empresa de
+ * uma vez (ver docs/performance.md). `where` reaproveita `buildCaStatusWhere`,
+ * o mesmo helper já usado por GET /api/assets. */
+export async function getAssetsPage(companyId: string, params: AssetsPageParams) {
+  const { page, pageSize, search, categoryId, statusId, conditionId, caStatus, sort, dir } = params;
+
+  const where: Prisma.AssetWhereInput = {
+    companyId,
+    ...(categoryId ? { categoryId } : {}),
+    ...(statusId ? { statusId } : {}),
+    ...(conditionId ? { conditionId } : {}),
+    ...(caStatus ? buildCaStatusWhere(caStatus) : {}),
+    ...(search
+      ? {
+          OR: [
+            { name: { contains: search, mode: "insensitive" as const } },
+            { assetCode: { contains: search, mode: "insensitive" as const } },
+            { category: { name: { contains: search, mode: "insensitive" as const } } },
+            { manufacturer: { name: { contains: search, mode: "insensitive" as const } } },
+          ],
+        }
+      : {}),
+  };
+
+  const [rows, total] = await prisma.$transaction([
+    prisma.asset.findMany({
+      where,
+      include: assetListIncludeForPage,
+      orderBy: buildAssetOrderBy(sort, dir),
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    prisma.asset.count({ where }),
+  ]);
+
+  return { rows: rows.map(serializeAsset), total };
+}
 
 const DECIMAL_FIELDS = [
   "minimumStock",

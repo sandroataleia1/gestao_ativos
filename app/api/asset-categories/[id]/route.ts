@@ -5,6 +5,7 @@ import { requirePermission } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
 import { handleApiError, NotFoundError } from "@/lib/api-errors";
 import { assetCategoryInputSchema } from "@/lib/validations/asset-lookups";
+import { invalidateCompanyData } from "@/lib/cache";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -21,6 +22,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
 
     const category = await prisma.assetCategory.update({ where: { id }, data: input });
 
+    invalidateCompanyData(companyId, ["reports-lookups"]);
     return NextResponse.json({ category });
   } catch (error) {
     return handleApiError(error);
@@ -43,6 +45,7 @@ export async function DELETE(_request: Request, { params }: RouteParams) {
       data: { active: false, deletedAt: new Date() },
     });
 
+    invalidateCompanyData(companyId, ["reports-lookups"]);
     return NextResponse.json({ category });
   } catch (error) {
     return handleApiError(error);

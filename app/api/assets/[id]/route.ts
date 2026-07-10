@@ -7,6 +7,7 @@ import { handleApiError, NotFoundError } from "@/lib/api-errors";
 import { assertAssetReferencesBelongToCompany, assetListInclude } from "@/lib/assets";
 import { assetInputSchema } from "@/lib/validations/asset";
 import { upsertAssetCertification } from "@/lib/certifications";
+import { logAudit } from "@/lib/audit";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -64,19 +65,33 @@ export async function PUT(request: Request, { params }: RouteParams) {
 // independentemente de haver ou não vínculos.
 export async function DELETE(_request: Request, { params }: RouteParams) {
   try {
-    const { companyId } = await requirePermission(PERMISSIONS.ASSET_MANAGE);
+    const { companyId, user } = await requirePermission(PERMISSIONS.ASSET_MANAGE);
     const { id } = await params;
 
     const existing = await prisma.asset.findFirst({
       where: { id, companyId },
-      select: { id: true },
+      select: { id: true, name: true, assetCode: true },
     });
     if (!existing) throw new NotFoundError("Ativo não encontrado.");
 
-    const asset = await prisma.asset.update({
-      where: { id },
-      data: { active: false, deletedAt: new Date() },
-      include: assetListInclude,
+    const asset = await prisma.$transaction(async (tx) => {
+      const updated = await tx.asset.update({
+        where: { id },
+        data: { active: false, deletedAt: new Date() },
+        include: assetListInclude,
+      });
+
+      await logAudit(tx, {
+        companyId,
+        actorUserId: user.id,
+        actorName: user.name,
+        action: "asset.delete",
+        targetType: "Asset",
+        targetId: id,
+        targetLabel: `${existing.name} (${existing.assetCode})`,
+      });
+
+      return updated;
     });
 
     return NextResponse.json({ asset });

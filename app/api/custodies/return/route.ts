@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
 import { handleApiError, NotFoundError, ValidationError } from "@/lib/api-errors";
+import { logAudit } from "@/lib/audit";
+import { invalidateCompanyData } from "@/lib/cache";
 import { custodyReturnInputSchema } from "@/lib/validations/custody";
 import { getMovementType } from "@/lib/stock";
 import {
@@ -97,12 +99,23 @@ export async function POST(request: Request) {
 
         await createCustodyPhotos(tx, companyId, custody.id, "RETURN", input.photos);
 
+        await logAudit(tx, {
+          companyId,
+          actorUserId: user.id,
+          actorName: user.name,
+          action: "custody.return",
+          targetType: "AssetCustody",
+          targetId: custody.id,
+          metadata: { employeeId: custody.employeeId, assetId: custody.assetId, destination: input.destination },
+        });
+
         return tx.assetCustody.findUniqueOrThrow({
           where: { id: custody.id },
           include: custodyListInclude,
         });
       });
 
+      invalidateCompanyData(companyId, ["dashboard", "stock"]);
       return NextResponse.json({ custody: serializeCustody(updated) });
     }
 
@@ -146,12 +159,23 @@ export async function POST(request: Request) {
 
       await createCustodyPhotos(tx, companyId, custody.id, "RETURN", input.photos);
 
+      await logAudit(tx, {
+        companyId,
+        actorUserId: user.id,
+        actorName: user.name,
+        action: "custody.return",
+        targetType: "AssetCustody",
+        targetId: custody.id,
+        metadata: { employeeId: custody.employeeId, assetId: custody.assetId, assetUnitId: custody.assetUnitId, destination: input.destination },
+      });
+
       return tx.assetCustody.findUniqueOrThrow({
         where: { id: custody.id },
         include: custodyListInclude,
       });
     });
 
+    invalidateCompanyData(companyId, ["dashboard", "stock"]);
     return NextResponse.json({ custody: serializeCustody(updated) });
   } catch (error) {
     return handleApiError(error);

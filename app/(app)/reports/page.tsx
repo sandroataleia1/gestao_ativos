@@ -9,6 +9,7 @@ import {
   getExpiringCaReport,
   getStockReport,
 } from "@/lib/reports";
+import { getCachedReportLookups } from "@/lib/cache";
 import { ReportsView } from "./reports-view";
 import type { ReportTab } from "./types";
 
@@ -46,27 +47,8 @@ export default async function ReportsPage({
     withinDays: get("withinDays"),
   };
 
-  const [categories, statuses, conditions, locations, employees, assets] = await Promise.all([
-    prisma.assetCategory.findMany({
-      where: { companyId, active: true },
-      select: { id: true, name: true },
-      orderBy: { name: "asc" },
-    }),
-    prisma.assetStatus.findMany({
-      where: { companyId, active: true },
-      select: { id: true, name: true },
-      orderBy: { name: "asc" },
-    }),
-    prisma.assetCondition.findMany({
-      where: { companyId, active: true },
-      select: { id: true, name: true },
-      orderBy: { name: "asc" },
-    }),
-    prisma.location.findMany({
-      where: { companyId, active: true },
-      select: { id: true, name: true },
-      orderBy: { name: "asc" },
-    }),
+  const [{ categories, statuses, conditions, locations }, employees, assets] = await Promise.all([
+    getCachedReportLookups(companyId),
     prisma.employee.findMany({
       where: { companyId, status: "ACTIVE" },
       select: { id: true, name: true },

@@ -14,6 +14,51 @@ datasource db {
 // Tenant
 // ---------------------------------------------------------------------------
 
+// Ciclo de vida operacional da Company — ver docs/adr/ADR-001, seção 1.1.
+enum CompanyOperationalStatus {
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+// Estado de CONTROLE da empresa (quem detém a conta hoje) — independente de
+// `CompanyOrigin` (como/por quem ela nasceu). Pré-cadastro é uma origem, não
+// um estado de controle: uma empresa pré-cadastrada por consultoria nasce
+// UNCLAIMED, não "PRE_REGISTERED". Ver docs/adr/ADR-001, seção 1.1.
+enum CompanyControlStatus {
+  UNCLAIMED
+  CLAIM_PENDING
+  CLAIMED
+  DISPUTED
+}
+
+// Como a Company nasceu — nunca muda depois de criada. Ver docs/adr/ADR-001,
+// seção 1.1.
+enum CompanyOrigin {
+  SELF_REGISTRATION
+  SST_PROVIDER
+  SUPER_ADMIN
+  IMPORT
+}
+
+// Tipo do documento em `documentOriginal`/`documentNormalized` (preparação
+// para suportar cadastro estrangeiro no futuro; nenhum dos dois campos é
+// preenchido nesta migration).
+enum CompanyDocumentType {
+  CNPJ
+  FOREIGN_REGISTRATION
+}
+
+// Estado de um vínculo User<->Company (M2A — ver docs/adr/ADR-001, seções
+// 2.2 e 3). Nasce INVITED por padrão; o backfill legado (M2B,
+// scripts/backfill-company-memberships.ts) cria diretamente como ACTIVE.
+enum CompanyMembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
 model Company {
   id        String   @id @default(cuid())
   name      String
@@ -24,6 +69,24 @@ model Company {
   // formulário); não há normalização/dígitos-puros porque o telefone não é
   // usado em busca/filtro em nenhum lugar do app.
   phone     String?
+  // Painel completo da empresa (app/(app)/configuracoes/empresa) — mesmo
+  // conjunto de campos já usado em `Supplier` (corporateName/tradeName/
+  // email/phone/address/city/state/zipCode), reaproveitado aqui em vez de
+  // inventar um formato de endereço novo. Todos opcionais: nenhum é
+  // obrigatório para a empresa continuar operando.
+  tradeName       String?
+  email           String?
+  address         String?
+  city            String?
+  state           String?
+  zipCode         String?
+  // Nome do responsável pela empresa (ex.: representante legal) — aparece
+  // nos termos de custódia junto com os outros dados da empresa.
+  responsibleName String?
+  // Logo em base64 (mesmo padrão de CustodyPhoto.dataUrl — sem storage
+  // externo configurado no projeto). Exibida no cabeçalho do app, nos
+  // termos de custódia e na página de QR Code.
+  logoDataUrl     String?
   // Config da Evolution API (WhatsApp) desta empresa — usada para enviar o
   // termo de responsabilidade por WhatsApp na entrega (ver
   // lib/evolution-api.ts). Por empresa, não global: cada tenant conecta sua
@@ -33,6 +96,31 @@ model Company {
   whatsappApiKey       String?
   whatsappInstanceName String?
   active    Boolean  @default(true)
+
+  // --- Ciclo de vida e proveniência (M1 — ver docs/adr/ADR-001) ---
+  operationalStatus   CompanyOperationalStatus @default(ACTIVE)
+  controlStatus       CompanyControlStatus     @default(CLAIMED)
+  origin              CompanyOrigin            @default(SELF_REGISTRATION)
+
+  // Quem criou a empresa quando ela nasce de um pré-cadastro de consultoria
+  // (FUTURO). A empresa continua sendo a dona dos dados; isto é só
+  // proveniência histórica. onDelete: Restrict — o prestador é sempre
+  // desativado logicamente (SstProvider.active = false), nunca apagado
+  // fisicamente; não há hoje nenhum fluxo de hard delete de SstProvider no
+  // repositório (ver prisma/proposed/README.md), então a constraint nunca
+  // bloqueia uma operação real.
+  createdByProviderId String?
+  createdByProvider   SstProvider? @relation("CompaniesCreatedByProvider", fields: [createdByProviderId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  claimedAt            DateTime? // preenchido só quando a reivindicação (FUTURO) for concluída; NULL para todo registro existente (data histórica real desconhecida)
+
+  // Campos preparatórios para normalização futura de documento — NULLABLE e
+  // SEM backfill nesta migration (nenhum dos três é preenchido aqui). O
+  // campo legado `document` (acima) continua sendo a única fonte de verdade
+  // até uma migration futura decidir a transição.
+  documentType        CompanyDocumentType?
+  documentOriginal    String?
+  documentNormalized  String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -57,10 +145,59 @@ model Company {
   positions       Position[]
   employees       Employee[]
   assetCertifications AssetCertification[]
+  companyTrainings    CompanyTraining[]
+  trainingClasses     TrainingClass[]
+  trainingParticipants TrainingParticipant[]
+  sstProviderLinks    SstProviderCompany[]
   custodyDocuments    CustodyDocument[]
   custodySignatures   CustodySignature[]
   custodyPhotos       CustodyPhoto[]
   custodySignatureRequests CustodySignatureRequest[]
+  auditLogs                AuditLog[]
+  memberships               CompanyMembership[]
+
+  @@index([createdByProviderId])
+}
+
+// ---------------------------------------------------------------------------
+// Vínculo User<->Company (M2A — ver docs/adr/ADR-001, seções 2.2 e 3). Base
+// para multi-tenant por usuário: um User poderá pertencer a mais de uma
+// Company através de memberships independentes. Nesta sprint a tabela só é
+// criada e populada via backfill 1:1 a partir de User.companyId — nenhuma
+// rota lê/escreve nela ainda, e requireCompany() continua usando só
+// User.companyId. Sem FK para UserRole (decisão do ADR-001, §3): o
+// invariante Role.companyId == companyId da membership ativa é garantido em
+// código (futuro resolver central), não por constraint de banco.
+// ---------------------------------------------------------------------------
+
+model CompanyMembership {
+  id              String                  @id @default(cuid())
+  userId          String
+  companyId       String
+  status          CompanyMembershipStatus @default(INVITED)
+
+  invitedByUserId String?
+  invitedAt       DateTime                @default(now())
+  activatedAt     DateTime?
+  suspendedAt     DateTime?
+  revokedAt       DateTime?
+
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  // onDelete: Cascade — uma membership não existe sem o usuário titular.
+  user            User     @relation("CompanyMembershipUser", fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  // onDelete: Restrict — nunca apagar fisicamente uma Company que ainda tem
+  // membership vinculada (mesma lógica de createdByProviderId na M1).
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  // onDelete: SetNull — invitedByUserId é proveniência acessória ("quem
+  // convidou"); excluir esse usuário preserva a membership do convidado.
+  invitedByUser   User?    @relation("CompanyMembershipInviter", fields: [invitedByUserId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@unique([userId, companyId])
+  @@index([companyId, status])
+  @@index([userId, status])
+  @@index([invitedByUserId])
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +222,16 @@ model User {
   sessions  Session[]
   accounts  Account[]
   userRoles UserRole[]
+  // `SetNull` (não `Restrict`) — excluir um usuário não pode ficar
+  // bloqueado por ele ter ações de auditoria registradas como ator; o log
+  // continua legível pelo `actorName` congelado em cada linha.
+  auditLogsAsActor AuditLog[] @relation("AuditLogActor")
+  // `SetNull` — mesma lógica de auditLogsAsActor: excluir o usuário que
+  // aprovou um vínculo não pode ficar bloqueado por isso.
+  sstProviderCompanyApprovals SstProviderCompany[]
+  sstProviderUsers SstProviderUser[]
+  companyMemberships          CompanyMembership[] @relation("CompanyMembershipUser")
+  invitedCompanyMemberships   CompanyMembership[] @relation("CompanyMembershipInviter")
 
   @@index([companyId])
 }
@@ -193,6 +340,50 @@ model UserRole {
   @@unique([userId, roleId])
   @@index([companyId])
   @@index([userId])
+}
+
+// Trilha de auditoria de ações administrativas críticas (ex.: criação,
+// bloqueio, redefinição de senha e exclusão de usuários — ver
+// app/(app)/configuracoes/usuarios). `targetId` é só uma string indexada,
+// sem relação: o alvo de uma ação (ex.: o usuário sendo excluído) pode não
+// existir mais no banco no momento em que o log é consultado depois.
+// Distingue quem agiu: usuário do Portal Empresa (padrão, todo histórico
+// anterior a esta coluna vira COMPANY_USER via @default) ou usuário do
+// Portal Consultoria SST agindo em nome de um provider (ver
+// docs/portal-consultoria.md). Não substitui actorUserId/actorName — um
+// SstProviderUser também é um User real, então essas colunas continuam
+// preenchidas normalmente; actorType/providerId só adicionam contexto de
+// qual portal originou a ação.
+enum AuditActorType {
+  COMPANY_USER
+  SST_PROVIDER_USER
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  actorUserId String?
+  actor       User?    @relation("AuditLogActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorName   String
+  actorType   AuditActorType @default(COMPANY_USER)
+  providerId  String?
+  provider    SstProvider? @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  action      String
+  targetType  String
+  targetId    String?
+  targetLabel String?
+  metadata    Json?
+  // Propagados por proxy.ts em toda requisição (ver lib/logger.ts) — cruza
+  // esta linha de auditoria com a linha correspondente do log estruturado.
+  requestId     String?
+  correlationId String?
+  createdAt     DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([targetType, targetId])
+  @@index([requestId])
+  @@index([providerId])
 }
 
 // ---------------------------------------------------------------------------
@@ -398,6 +589,8 @@ model Asset {
   @@index([supplierId])
   @@index([statusId])
   @@index([conditionId])
+  @@index([companyId, active])
+  @@index([companyId, trackingMode])
 }
 
 // ---------------------------------------------------------------------------
@@ -464,6 +657,7 @@ model AssetCertification {
   @@index([companyId])
   @@index([assetId])
   @@index([expirationDate])
+  @@index([companyId, certificationType, status, expirationDate])
 }
 
 // ---------------------------------------------------------------------------
@@ -494,6 +688,8 @@ model Location {
   stockMovementsDestination  StockMovement[] @relation("StockMovementDestination")
 
   @@index([companyId])
+  @@index([locationTypeId])
+  @@index([companyId, active])
 }
 
 // ---------------------------------------------------------------------------
@@ -542,6 +738,9 @@ model AssetUnit {
   @@unique([companyId, serialNumber])
   @@index([companyId])
   @@index([assetId])
+  @@index([currentLocationId])
+  @@index([statusId])
+  @@index([conditionId])
 }
 
 enum CustodyStatus {
@@ -598,6 +797,8 @@ model AssetCustody {
   @@index([employeeId])
   @@index([assetId])
   @@index([status])
+  @@index([companyId, status, expectedReturnAt])
+  @@index([companyId, deliveredAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -861,9 +1062,319 @@ model Employee {
   updatedAt    DateTime       @updatedAt
 
   custodies AssetCustody[]
+  trainingParticipants TrainingParticipant[]
 
   @@unique([companyId, document])
   @@index([companyId])
   @@index([departmentId])
   @@index([positionId])
+}
+
+// ---------------------------------------------------------------------------
+// Treinamentos — Sprint 0 (fundação do catálogo, ver docs/trainings-domain.md).
+// Dois níveis: TrainingTemplate é o catálogo global mantido pela plataforma
+// (não pertence a empresa nenhuma); CompanyTraining é o que a empresa
+// realmente usa, sempre companyId obrigatório. Criar um CompanyTraining a
+// partir de um TrainingTemplate copia os campos uma única vez — depois disso
+// os dois são totalmente independentes (editar um nunca altera o outro).
+// TrainingType/InstructorType são enums (classificação fixa da plataforma),
+// não tabelas parametrizáveis por empresa como AssetStatus/AssetCondition —
+// mesma categoria de CertificationType/CertificationStatus em
+// AssetCertification.
+// ---------------------------------------------------------------------------
+
+enum TrainingType {
+  LEGAL
+  CORPORATE
+}
+
+enum InstructorType {
+  INTERNAL
+  EXTERNAL
+  BOTH
+}
+
+// Catálogo global de modelos de treinamento (Integração, NR-01, NR-05, etc.).
+// Somente leitura via API nesta sprint — sem endpoints de create/update/
+// delete; a manutenção do catálogo inicial é via prisma/seed.ts.
+model TrainingTemplate {
+  id                     String         @id @default(cuid())
+  title                  String
+  code                   String         @unique
+  description            String?
+  category               String
+  trainingType           TrainingType
+  nrReference            String?
+  defaultValidityMonths  Int?
+  defaultWorkloadHours   Int?
+  requiresCertificate    Boolean        @default(true)
+  requiresAttendanceList Boolean        @default(true)
+  requiresSignature      Boolean        @default(false)
+  requiresExam           Boolean        @default(false)
+  minimumPassingGrade    Int?
+  defaultInstructorType  InstructorType @default(BOTH)
+  // Suporta versionamento futuro do catálogo (ex.: nova versão de uma NR) sem
+  // afetar CompanyTraining já criados a partir da versão anterior —
+  // CompanyTraining copia os campos no momento da criação e nunca mais lê o
+  // template de novo, então um bump aqui não retroage.
+  version                Int            @default(1)
+  active                 Boolean        @default(true)
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+
+  companyTrainings CompanyTraining[]
+
+  @@index([category])
+  @@index([trainingType])
+  @@index([active])
+}
+
+// Treinamento configurado por uma empresa — o que de fato é usado/agendado/
+// vinculado a colaboradores nas sprints futuras (turmas, participantes,
+// certificados). Pode nascer de um TrainingTemplate (cópia pontual) ou ser
+// 100% customizado (trainingTemplateId nulo). "Excluir" na UI é soft delete
+// (active: false) — nunca remove a linha.
+model CompanyTraining {
+  id                     String            @id @default(cuid())
+  companyId              String
+  company                Company           @relation(fields: [companyId], references: [id])
+  trainingTemplateId     String?
+  trainingTemplate       TrainingTemplate? @relation(fields: [trainingTemplateId], references: [id])
+  title                  String
+  description            String?
+  category               String?
+  trainingType           TrainingType
+  nrReference            String?
+  validityMonths         Int?
+  workloadHours          Int?
+  requiresCertificate    Boolean           @default(true)
+  requiresAttendanceList Boolean           @default(true)
+  requiresSignature      Boolean           @default(false)
+  requiresExam           Boolean           @default(false)
+  minimumPassingGrade    Int?
+  instructorType         InstructorType    @default(BOTH)
+  mandatory              Boolean           @default(false)
+  // Quem gerencia operacionalmente este treinamento — a empresa continua
+  // sendo a dona dos dados em ambos os casos (companyId nunca muda); isso só
+  // marca quem opera no dia a dia. `@default(INTERNAL)` cobre todo registro
+  // já existente sem precisar de backfill manual. Ver docs/sst-providers.md.
+  managementMode         TrainingManagementMode @default(INTERNAL)
+  managedByProviderId    String?
+  managedByProvider      SstProvider?      @relation(fields: [managedByProviderId], references: [id])
+  // Reservado para histórico futuro de revisões do próprio CompanyTraining —
+  // contador independente da version do TrainingTemplate de origem (não
+  // incrementado em lugar nenhum ainda nesta sprint).
+  version                Int               @default(1)
+  active                 Boolean           @default(true)
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+
+  trainingClasses TrainingClass[]
+
+  @@index([companyId])
+  @@index([trainingTemplateId])
+  @@index([companyId, active])
+  @@index([companyId, trainingType])
+  // Consulta natural do futuro Portal Consultoria ("todos os treinamentos
+  // que este prestador gerencia, em todas as empresas") — ver
+  // docs/training-architecture.md.
+  @@index([managedByProviderId])
+}
+
+// ---------------------------------------------------------------------------
+// Turmas — Sprint 1 (ver docs/trainings-domain.md). Uma turma agenda um
+// CompanyTraining em uma data/local/instrutor concretos. Nunca é apagada —
+// "cancelar" é só status: CANCELLED (sem endpoint DELETE, sem campo
+// `active`/soft-delete como em CompanyTraining).
+// ---------------------------------------------------------------------------
+
+enum TrainingClassStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model TrainingClass {
+  id                  String              @id @default(cuid())
+  companyId           String
+  company             Company             @relation(fields: [companyId], references: [id])
+  companyTrainingId   String
+  companyTraining     CompanyTraining     @relation(fields: [companyTrainingId], references: [id])
+  title               String
+  status              TrainingClassStatus @default(SCHEDULED)
+  startsAt            DateTime
+  endsAt              DateTime?
+  // Texto livre — não referencia o model `Location` (rastreamento físico de
+  // ativos, domínio diferente): aqui é só "onde a turma acontece".
+  location            String?
+  internalInstructor  String?
+  externalInstructor  String?
+  maximumParticipants Int?
+  notes               String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  participants TrainingParticipant[]
+
+  @@index([companyId])
+  @@index([companyTrainingId])
+  @@index([companyId, status])
+  @@index([companyId, startsAt])
+}
+
+// ---------------------------------------------------------------------------
+// Participantes — Sprint 2 (ver docs/trainings-domain.md). Sempre um
+// Employee já cadastrado na empresa — nunca um convidado externo; não existe
+// (e não deve existir) uma tabela de "pessoa externa" para isso, mesmo
+// pensando no futuro Portal SST (a consultoria opera sobre colaboradores já
+// cadastrados, não cria pessoas soltas).
+// ---------------------------------------------------------------------------
+
+enum TrainingAttendanceStatus {
+  ENROLLED
+  PRESENT
+  ABSENT
+}
+
+enum TrainingResultStatus {
+  PENDING
+  APPROVED
+  FAILED
+}
+
+model TrainingParticipant {
+  id               String                    @id @default(cuid())
+  companyId        String
+  company          Company                   @relation(fields: [companyId], references: [id])
+  trainingClassId  String
+  trainingClass    TrainingClass             @relation(fields: [trainingClassId], references: [id])
+  employeeId       String
+  employee         Employee                  @relation(fields: [employeeId], references: [id])
+  attendanceStatus TrainingAttendanceStatus  @default(ENROLLED)
+  resultStatus     TrainingResultStatus      @default(PENDING)
+  enrolledAt       DateTime                  @default(now())
+  // Setado tanto em APPROVED quanto em FAILED (quando a avaliação
+  // termina) — só `expiresAt` é exclusivo de APPROVED. Ver
+  // docs/trainings-domain.md.
+  completedAt      DateTime?
+  expiresAt        DateTime?
+  notes            String?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+
+  @@unique([companyId, trainingClassId, employeeId])
+  @@index([companyId])
+  @@index([trainingClassId])
+  @@index([employeeId])
+  // Composto (não `expiresAt` isolado) porque toda leitura de vencimento é
+  // sempre por empresa — mesmo padrão de alerta já usado no resto do
+  // sistema (nunca uma varredura global). A futura sprint de alertas filtra
+  // exatamente por esses dois campos juntos. Ver docs/training-architecture.md.
+  @@index([companyId, expiresAt])
+}
+
+// ---------------------------------------------------------------------------
+// Preparação arquitetural para o futuro Portal Consultoria (ver
+// docs/sst-providers.md). Não implementa o portal, login de consultoria nem
+// nenhuma tela além do lado da empresa — só a base para marcar que um
+// CompanyTraining é gerenciado por uma consultoria SST externa em vez da
+// própria empresa. A empresa continua sendo a dona dos dados em qualquer
+// caso; a consultoria só recebe um nível de acesso operacional.
+// ---------------------------------------------------------------------------
+
+enum TrainingManagementMode {
+  INTERNAL
+  EXTERNAL_PROVIDER
+}
+
+// Catálogo global de prestadores SST — SEM companyId, de propósito: um
+// prestador pode futuramente atender mais de uma empresa (mesmo raciocínio
+// do futuro Portal Consultoria). O isolamento por empresa não vem de um
+// companyId nesta tabela — vem inteiramente do vínculo SstProviderCompany.
+// Nenhuma rota deve listar/expor SstProvider fora desse vínculo.
+model SstProvider {
+  id        String   @id @default(cuid())
+  name      String
+  document  String?
+  email     String?
+  phone     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  companyLinks     SstProviderCompany[]
+  createdCompanies Company[] @relation("CompaniesCreatedByProvider")
+  companyTrainings CompanyTraining[]
+  providerUsers    SstProviderUser[]
+  auditLogs        AuditLog[]
+}
+
+enum SstProviderCompanyStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+enum SstProviderCompanyAccessLevel {
+  VIEW
+  OPERATION
+  ADMINISTRATION
+}
+
+// O vínculo em si — é aqui que mora o isolamento multi-tenant real: toda
+// query do lado da empresa filtra por companyId nesta tabela, nunca em
+// SstProvider direto. Só um vínculo ACTIVE com accessLevel OPERATION ou
+// ADMINISTRATION permite que o prestador gerencie um CompanyTraining (VIEW
+// nunca gerencia) — ver assertManagementModeValid em lib/trainings.ts.
+model SstProviderCompany {
+  id               String                         @id @default(cuid())
+  providerId       String
+  provider         SstProvider                    @relation(fields: [providerId], references: [id])
+  companyId        String
+  company          Company                        @relation(fields: [companyId], references: [id])
+  status           SstProviderCompanyStatus       @default(PENDING)
+  accessLevel      SstProviderCompanyAccessLevel
+  startsAt         DateTime                       @default(now())
+  endsAt           DateTime?
+  approvedByUserId String?
+  approvedByUser   User?                          @relation(fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  approvedAt       DateTime?
+  revokedAt        DateTime?
+  createdAt        DateTime                       @default(now())
+  updatedAt        DateTime                       @updatedAt
+
+  @@unique([providerId, companyId])
+  @@index([companyId])
+  @@index([providerId])
+}
+
+enum SstProviderUserRole {
+  OWNER
+  TECHNICIAN
+  VIEWER
+}
+
+// Dá acesso ao Portal Consultoria (rotas /sst e /api/sst) — vincula um User
+// (a mesma identidade do Portal Empresa) a um SstProvider. Um User pode ter
+// um vínculo de empresa (User.companyId) E um vínculo de consultoria ao
+// mesmo tempo, de forma totalmente independente: o Portal Consultoria
+// NUNCA lê User.companyId como tenant, só este vínculo. Não é
+// globalmente único em userId (só em [providerId, userId]) para permitir,
+// no futuro, um mesmo usuário atuar em mais de uma consultoria.
+model SstProviderUser {
+  id         String              @id @default(cuid())
+  providerId String
+  provider   SstProvider         @relation(fields: [providerId], references: [id])
+  userId     String
+  user       User                @relation(fields: [userId], references: [id])
+  role       SstProviderUserRole
+  active     Boolean             @default(true)
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  @@unique([providerId, userId])
+  @@index([providerId])
+  @@index([userId])
 }

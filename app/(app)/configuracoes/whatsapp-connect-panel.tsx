@@ -5,6 +5,16 @@ import { CheckCircle2Icon, Loader2Icon, MessageCircleIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 type ConnectionState = "idle" | "connecting" | "open";
 
@@ -23,6 +33,7 @@ export function WhatsappConnectPanel({ initialHasInstance }: { initialHasInstanc
   const [qrCodeBase64, setQrCodeBase64] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const qrIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -119,10 +130,41 @@ export function WhatsappConnectPanel({ initialHasInstance }: { initialHasInstanc
           <CheckCircle2Icon className="size-4 text-emerald-600 dark:text-emerald-500" />
           <span>WhatsApp conectado.</span>
         </div>
-        <Button type="button" variant="outline" size="sm" onClick={handleDisconnect} disabled={isDisconnecting}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => setConfirmDisconnect(true)}
+          disabled={isDisconnecting}
+        >
           {isDisconnecting ? <Loader2Icon className="animate-spin" /> : null}
           Desconectar
         </Button>
+
+        <AlertDialog open={confirmDisconnect} onOpenChange={setConfirmDisconnect}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Desconectar WhatsApp?</AlertDialogTitle>
+              <AlertDialogDescription>
+                A empresa deixa de enviar o termo de responsabilidade por WhatsApp nas próximas
+                entregas até que uma nova conexão seja feita.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isDisconnecting}>Cancelar</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={async () => {
+                  await handleDisconnect();
+                  setConfirmDisconnect(false);
+                }}
+                disabled={isDisconnecting}
+                className="bg-destructive text-white hover:bg-destructive/90"
+              >
+                {isDisconnecting ? "Desconectando..." : "Desconectar"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     );
   }

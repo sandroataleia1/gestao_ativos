@@ -1,25 +1,34 @@
 import type { Metadata } from "next";
 
-import { prisma } from "@/lib/prisma";
 import { hasPermission, requirePermissionOrDeny } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
+import { EMPLOYEE_SORT_FIELDS, getEmployeesPage } from "@/lib/employees";
+import { parsePageParams, parseSearchParam, parseSortParams, type SearchParamsInput } from "@/lib/pagination";
 import { EmployeesTable } from "./employees-table";
 
 export const metadata: Metadata = {
   title: "Colaboradores — Gestão de Ativos",
 };
 
-export default async function EmployeesPage() {
+export default async function EmployeesPage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParamsInput>;
+}) {
   const { companyId } = await requirePermissionOrDeny(PERMISSIONS.EMPLOYEE_VIEW);
   const canManage = await hasPermission(PERMISSIONS.EMPLOYEE_MANAGE);
+  const resolvedSearchParams = await searchParams;
 
-  const employees = await prisma.employee.findMany({
-    where: { companyId },
-    include: {
-      department: { select: { id: true, name: true } },
-      position: { select: { id: true, name: true } },
-    },
-    orderBy: { name: "asc" },
+  const { page, pageSize } = parsePageParams(resolvedSearchParams);
+  const search = parseSearchParam(resolvedSearchParams);
+  const { field: sort, dir } = parseSortParams(resolvedSearchParams, EMPLOYEE_SORT_FIELDS, "name");
+
+  const { rows: employees, total } = await getEmployeesPage(companyId, {
+    page,
+    pageSize,
+    search: search || undefined,
+    sort,
+    dir,
   });
 
   return (
@@ -31,7 +40,15 @@ export default async function EmployeesPage() {
         </p>
       </div>
 
-      <EmployeesTable initialEmployees={employees} canManage={canManage} />
+      <EmployeesTable
+        initialEmployees={employees}
+        total={total}
+        page={page}
+        pageSize={pageSize}
+        sort={sort}
+        dir={dir}
+        canManage={canManage}
+      />
     </div>
   );
 }

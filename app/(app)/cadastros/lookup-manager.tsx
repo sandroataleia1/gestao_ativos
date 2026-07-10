@@ -1,16 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
-import {
-  ArrowDownIcon,
-  ArrowUpIcon,
-  ChevronsUpDownIcon,
-  Loader2Icon,
-  MoreHorizontalIcon,
-  PlusIcon,
-  SearchIcon,
-} from "lucide-react";
+import { useEffect, useState, type FormEvent } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Loader2Icon, MoreHorizontalIcon, PlusIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +10,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ServerSortableHeader } from "@/components/ui/data-table-column-header";
+import { DebouncedSearchInput } from "@/components/ui/debounced-search-input";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import {
   Dialog,
   DialogContent,
@@ -77,44 +73,31 @@ function ColorCell({ value }: { value: string | null | undefined }) {
 export function LookupManager({
   config,
   initialRows,
+  total,
+  page,
+  pageSize,
+  sort,
+  dir,
   canManage,
 }: {
   config: LookupEntityConfig;
   initialRows: LookupRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  sort: string;
+  dir: "asc" | "desc";
   canManage: boolean;
 }) {
   const router = useRouter();
-  const [search, setSearch] = useState("");
+  const searchParams = useSearchParams();
+  const hasActiveFilters = Boolean(searchParams.get("q"));
   const [formState, setFormState] = useState<{ open: boolean; row: LookupRow | null }>({
     open: false,
     row: null,
   });
   const [deleteTarget, setDeleteTarget] = useState<LookupRow | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [sort, setSort] = useState<{ key: string; desc: boolean } | null>(null);
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const rows = q
-      ? initialRows.filter((row) => String(row[config.nameField] ?? "").toLowerCase().includes(q))
-      : initialRows;
-
-    if (!sort) return rows;
-    const sorted = [...rows].sort((a, b) => {
-      const aValue = String(a[sort.key] ?? "");
-      const bValue = String(b[sort.key] ?? "");
-      return aValue.localeCompare(bValue, "pt-BR", { sensitivity: "base" });
-    });
-    return sort.desc ? sorted.reverse() : sorted;
-  }, [initialRows, search, config.nameField, sort]);
-
-  function toggleSort(key: string) {
-    setSort((prev) => {
-      if (!prev || prev.key !== key) return { key, desc: false };
-      if (!prev.desc) return { key, desc: true };
-      return null;
-    });
-  }
 
   async function handleDeleteConfirm() {
     if (!deleteTarget) return;
@@ -140,15 +123,10 @@ export function LookupManager({
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="relative w-full max-w-xs">
-          <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder={`Buscar em ${config.tabLabel.toLowerCase()}...`}
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="w-64 pl-8"
-          />
-        </div>
+        <DebouncedSearchInput
+          placeholder={`Buscar em ${config.tabLabel.toLowerCase()}...`}
+          className="w-full max-w-xs"
+        />
         {canManage ? (
           <Button onClick={() => setFormState({ open: true, row: null })}>
             <PlusIcon />
@@ -161,36 +139,18 @@ export function LookupManager({
         <Table>
           <TableHeader>
             <TableRow>
-              {config.columns.map((col) => {
-                const isSorted = sort?.key === col.key;
-                return (
-                  <TableHead key={col.key}>
-                    <button
-                      type="button"
-                      onClick={() => toggleSort(col.key)}
-                      className="-mx-2 flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-left font-medium transition-colors hover:bg-muted hover:text-foreground"
-                    >
-                      {col.label}
-                      {isSorted ? (
-                        sort?.desc ? (
-                          <ArrowDownIcon className="size-3.5 text-foreground" />
-                        ) : (
-                          <ArrowUpIcon className="size-3.5 text-foreground" />
-                        )
-                      ) : (
-                        <ChevronsUpDownIcon className="size-3.5 text-muted-foreground/50" />
-                      )}
-                    </button>
-                  </TableHead>
-                );
-              })}
+              {config.columns.map((col) => (
+                <TableHead key={col.key}>
+                  <ServerSortableHeader field={col.key} label={col.label} currentField={sort} currentDir={dir} />
+                </TableHead>
+              ))}
               {config.hasActiveToggle ? <TableHead>Status</TableHead> : null}
               {canManage ? <TableHead /> : null}
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filtered.length ? (
-              filtered.map((row) => (
+            {initialRows.length ? (
+              initialRows.map((row) => (
                 <TableRow key={row.id}>
                   {config.columns.map((col) => (
                     <TableCell key={col.key}>
@@ -212,19 +172,26 @@ export function LookupManager({
                     <TableCell>
                       <div className="flex justify-end">
                         <DropdownMenu>
-                          <DropdownMenuTrigger
-                            render={
-                              <Button variant="ghost" size="icon-sm" aria-label="Ações">
-                                <MoreHorizontalIcon className="size-4" />
-                              </Button>
-                            }
-                          />
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <DropdownMenuTrigger
+                                  render={
+                                    <Button variant="ghost" size="icon-sm" aria-label="Ações">
+                                      <MoreHorizontalIcon className="size-4" />
+                                    </Button>
+                                  }
+                                />
+                              }
+                            />
+                            <TooltipContent>Ações</TooltipContent>
+                          </Tooltip>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => setFormState({ open: true, row })}>
                               Editar
                             </DropdownMenuItem>
                             <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(row)}>
-                              Excluir
+                              Desativar
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -238,11 +205,11 @@ export function LookupManager({
                 <TableCell colSpan={config.columns.length + extraColumns} className="h-32 text-center">
                   <div className="grid justify-items-center gap-2 text-muted-foreground">
                     <p>
-                      {initialRows.length
+                      {hasActiveFilters
                         ? "Nenhum registro encontrado para a busca."
                         : `Nenhum(a) ${config.title.toLowerCase()} cadastrado(a) ainda.`}
                     </p>
-                    {canManage && !initialRows.length ? (
+                    {canManage && !hasActiveFilters ? (
                       <Button size="sm" onClick={() => setFormState({ open: true, row: null })}>
                         <PlusIcon />
                         Criar o primeiro registro
@@ -255,6 +222,8 @@ export function LookupManager({
           </TableBody>
         </Table>
       </div>
+
+      <PaginationBar page={page} pageSize={pageSize} total={total} />
 
       {canManage ? (
         <LookupFormDialog
@@ -272,10 +241,10 @@ export function LookupManager({
       <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Excluir {config.title.toLowerCase()}?</AlertDialogTitle>
+            <AlertDialogTitle>Desativar {config.title.toLowerCase()}?</AlertDialogTitle>
             <AlertDialogDescription>
               {deleteTarget ? String(deleteTarget[config.nameField]) : ""} será desativado(a). O cadastro é
-              preservado (ativos vinculados nunca são apagados).
+              preservado (ativos vinculados nunca são apagados) e pode ser reativado depois editando o status.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -285,7 +254,7 @@ export function LookupManager({
               disabled={isDeleting}
               className="bg-destructive text-white hover:bg-destructive/90"
             >
-              {isDeleting ? "Excluindo..." : "Excluir"}
+              {isDeleting ? "Desativando..." : "Desativar"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

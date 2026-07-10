@@ -1,20 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import {
-  type ColumnDef,
-  type SortingState,
-  flexRender,
-  getCoreRowModel,
-  getSortedRowModel,
-  useReactTable,
-} from "@tanstack/react-table";
-import { PlusIcon, SearchIcon } from "lucide-react";
+import { useMemo } from "react";
+import { type ColumnDef, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { PlusIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { SortableHeader } from "@/components/ui/data-table-column-header";
+import { DebouncedSearchInput } from "@/components/ui/debounced-search-input";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import {
   Table,
   TableBody,
@@ -41,8 +34,15 @@ const SIGNATURE_STATUS_BADGE: Record<
   PENDING: { label: "Aguardando assinatura", variant: "outline" },
 };
 
+/** Busca/paginação server-side (via URL — ver app/(app)/custodies/page.tsx);
+ * ordenação continua fixa por `deliveredAt desc` (mesmo padrão de
+ * StockMovementsTable — é um histórico cronológico, não um cadastro que se
+ * reordena por qualquer coluna). */
 export function CustodyTable({
   rows,
+  total,
+  page,
+  pageSize,
   emptyMessage,
   canManage,
   showStatus = false,
@@ -52,6 +52,9 @@ export function CustodyTable({
   onCreateNew,
 }: {
   rows: CustodyRow[];
+  total: number;
+  page: number;
+  pageSize: number;
   emptyMessage: string;
   canManage: boolean;
   showStatus?: boolean;
@@ -60,31 +63,18 @@ export function CustodyTable({
   onOpenQr?: (custody: CustodyRow) => void;
   onCreateNew?: () => void;
 }) {
-  const [search, setSearch] = useState("");
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter(
-      (row) =>
-        row.employee.name.toLowerCase().includes(q) ||
-        row.asset.name.toLowerCase().includes(q) ||
-        row.asset.assetCode.toLowerCase().includes(q),
-    );
-  }, [rows, search]);
-
   const columns = useMemo<ColumnDef<CustodyRow>[]>(() => {
     const base: ColumnDef<CustodyRow>[] = [
       {
         id: "employee",
         accessorFn: (row) => row.employee.name,
-        header: ({ column }) => <SortableHeader column={column} label="Colaborador" />,
+        header: "Colaborador",
         cell: ({ row }) => row.original.employee.name,
       },
       {
         id: "asset",
         accessorFn: (row) => row.asset.name,
-        header: ({ column }) => <SortableHeader column={column} label="Ativo" />,
+        header: "Ativo",
         cell: ({ row }) => (
           <div className="grid">
             <span>{row.original.asset.name}</span>
@@ -101,13 +91,13 @@ export function CustodyTable({
       {
         id: "deliveredAt",
         accessorFn: (row) => row.deliveredAt,
-        header: ({ column }) => <SortableHeader column={column} label="Entregue em" />,
+        header: "Entregue em",
         cell: ({ row }) => formatDate(row.original.deliveredAt),
       },
       {
         id: "expectedReturnAt",
         accessorFn: (row) => row.expectedReturnAt ?? "",
-        header: ({ column }) => <SortableHeader column={column} label="Previsão de devolução" />,
+        header: "Previsão de devolução",
         cell: ({ row }) => {
           const overdue = isCustodyOverdue(row.original);
           return (
@@ -121,7 +111,7 @@ export function CustodyTable({
       {
         id: "signature",
         accessorFn: (row) => row.signatureRequest?.status ?? "",
-        header: ({ column }) => <SortableHeader column={column} label="Assinatura" />,
+        header: "Assinatura",
         cell: ({ row }) => {
           const signatureRequest = row.original.signatureRequest;
           if (!signatureRequest) return <span className="text-muted-foreground">—</span>;
@@ -135,7 +125,7 @@ export function CustodyTable({
       base.push({
         id: "status",
         accessorFn: (row) => row.status,
-        header: ({ column }) => <SortableHeader column={column} label="Status" />,
+        header: "Status",
         cell: ({ row }) => (
           <Badge variant={row.original.status === "ACTIVE" ? "default" : "outline"}>
             {row.original.status === "ACTIVE" ? "Ativa" : "Devolvida"}
@@ -145,7 +135,7 @@ export function CustodyTable({
       base.push({
         id: "returnedAt",
         accessorFn: (row) => row.returnedAt ?? "",
-        header: ({ column }) => <SortableHeader column={column} label="Devolvido em" />,
+        header: "Devolvido em",
         cell: ({ row }) => formatDate(row.original.returnedAt),
       });
     }
@@ -179,28 +169,15 @@ export function CustodyTable({
     return base;
   }, [showStatus, canManage, onReturn, onOpenDocuments, onOpenQr]);
 
-  const [sorting, setSorting] = useState<SortingState>([]);
-
   const table = useReactTable({
-    data: filtered,
+    data: rows,
     columns,
-    state: { sorting },
-    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
   });
 
   return (
     <div className="grid gap-3 pt-4">
-      <div className="relative w-full max-w-xs">
-        <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder="Buscar por colaborador ou ativo..."
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          className="w-64 pl-8"
-        />
-      </div>
+      <DebouncedSearchInput placeholder="Buscar por colaborador ou ativo..." className="w-full max-w-xs" />
 
       <div className="rounded-xl border bg-card">
         <Table>
@@ -246,6 +223,8 @@ export function CustodyTable({
           </TableBody>
         </Table>
       </div>
+
+      <PaginationBar page={page} pageSize={pageSize} total={total} />
     </div>
   );
 }

@@ -32,6 +32,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# Templates sem segredo nenhum — sempre versionados (ver .env.example,
+# .env.production.example).
+!.env*.example
 
 # vercel
 .vercel
@@ -41,6 +44,25 @@ yarn-error.log*
 next-env.d.ts
 
 /app/generated/prisma
+
+# Deploy de produção (docker-compose.prod.yml) — gerados/baixados em
+# runtime na VPS, nunca versionados: certificados TLS (certbot/conf) e
+# desafios ACME (certbot/www) do Let's Encrypt, dumps de backup do Postgres.
+/certbot/
+/backups/
+
+# Dumps de backup do Postgres (pg_dump/psql) — nunca versionar, onde quer
+# que sejam gerados (não só em /backups/, redundante de propósito: cobre
+# qualquer dump gerado fora dessa pasta por engano, ex.: scratchpad, raiz do
+# projeto). As duas exceções abaixo são intencionais e NÃO são dumps:
+# migrations reais (prisma/migrations/**/migration.sql) sempre devem ser
+# versionadas, e o SQL de propostas em revisão (prisma/proposed/**/*.sql)
+# também é deliberadamente versionado para permitir review em PR.
+*.sql
+*.sql.gz
+*.dump
+!prisma/migrations/**/migration.sql
+!prisma/proposed/**/*.sql
 
 # Allowlist local de comandos aprovados no Claude Code — acumula strings de
 # comandos já executados (podem conter segredos colados em bash inline, ex.:

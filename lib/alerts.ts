@@ -1,10 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { getExpiringCaReport } from "@/lib/reports";
-import { getStockRows, toNumber } from "@/lib/stock";
-import { isCustodyOverdue } from "@/lib/custodies/badge";
+import { toNumber } from "@/lib/stock";
 import { formatDateOnlyBR } from "@/lib/date-only";
-
-type StockRow = Awaited<ReturnType<typeof getStockRows>>[number];
 
 // Central de alertas — MVP calculado sob demanda (sem fila/BullMQ, sem
 // e-mail): cada chamada a `getAlerts` recalcula tudo na hora, a partir dos
@@ -59,32 +56,34 @@ export async function getCaAlerts(companyId: string, now: Date): Promise<Alert[]
 // de 7 dias. "Atrasada" usa o mesmo critério derivado de
 // lib/custodies/badge.ts (nunca persistido).
 export async function getCustodyOverdueAlerts(companyId: string, now: Date): Promise<Alert[]> {
+  // O `where` já garante exatamente o critério de `isCustodyOverdue`
+  // (status ACTIVE + expectedReturnAt no passado) usando o mesmo `now` —
+  // reaplicar o filtro em JS depois era redundante. Usa o índice composto
+  // (companyId, status, expectedReturnAt).
   const custodies = await prisma.assetCustody.findMany({
     where: { companyId, status: "ACTIVE", expectedReturnAt: { lt: now } },
     include: {
       employee: { select: { name: true } },
       asset: { select: { name: true } },
     },
+    orderBy: { expectedReturnAt: "asc" },
+    take: 500,
   });
 
-  return custodies
-    .filter((custody) =>
-      isCustodyOverdue({ status: custody.status, expectedReturnAt: custody.expectedReturnAt }),
-    )
-    .map((custody) => {
-      const daysLate = Math.floor((now.getTime() - custody.expectedReturnAt!.getTime()) / DAY_MS);
-      const severity: AlertSeverity = daysLate > CUSTODY_OVERDUE_CRITICAL_DAYS ? "CRITICAL" : "WARNING";
-      return {
-        id: `custody-${custody.id}`,
-        type: "CUSTODY_OVERDUE" as const,
-        severity,
-        title: `Devolução atrasada: ${custody.employee.name} — ${custody.asset.name}`,
-        description: `Prevista para ${formatDateOnlyBR(custody.expectedReturnAt)}, atrasada há ${daysLate} dia(s).`,
-        resourceType: "CUSTODY" as const,
-        resourceId: custody.id,
-        detectedAt: now.toISOString(),
-      };
-    });
+  return custodies.map((custody) => {
+    const daysLate = Math.floor((now.getTime() - custody.expectedReturnAt!.getTime()) / DAY_MS);
+    const severity: AlertSeverity = daysLate > CUSTODY_OVERDUE_CRITICAL_DAYS ? "CRITICAL" : "WARNING";
+    return {
+      id: `custody-${custody.id}`,
+      type: "CUSTODY_OVERDUE" as const,
+      severity,
+      title: `Devolução atrasada: ${custody.employee.name} — ${custody.asset.name}`,
+      description: `Prevista para ${formatDateOnlyBR(custody.expectedReturnAt)}, atrasada há ${daysLate} dia(s).`,
+      resourceType: "CUSTODY" as const,
+      resourceId: custody.id,
+      detectedAt: now.toISOString(),
+    };
+  });
 }
 
 // Requisito: estoque abaixo do mínimo, se houver campo mínimo — o schema já
@@ -92,22 +91,23 @@ export async function getCustodyOverdueAlerts(companyId: string, now: Date): Pro
 // app/(app)/assets/asset-form-dialog.tsx). Assets sem `minimumStock`
 // configurado nunca geram alerta (não há "mínimo padrão" inventado). Saldo
 // zerado é CRITICAL; abaixo do mínimo mas ainda positivo é WARNING.
-export async function getLowStockAlerts(
-  companyId: string,
-  now: Date,
-  precomputedStockRows?: StockRow[],
-): Promise<Alert[]> {
+export async function getLowStockAlerts(companyId: string, now: Date): Promise<Alert[]> {
   const assetsWithMinimum = await prisma.asset.findMany({
     where: { companyId, active: true, trackingMode: "CONSUMABLE", minimumStock: { not: null } },
     select: { id: true, name: true, defaultUnit: true, minimumStock: true },
   });
   if (assetsWithMinimum.length === 0) return [];
 
-  const stockRows = precomputedStockRows ?? (await getStockRows(companyId, {}));
-  const totalByAsset = new Map<string, number>();
-  for (const row of stockRows) {
-    totalByAsset.set(row.assetId, (totalByAsset.get(row.assetId) ?? 0) + row.quantity);
-  }
+  // `minimumStock` só existe pra ativos CONSUMABLE, que são sempre saldo em
+  // StockBalance (nunca AssetUnit) — soma direto por groupBy em vez de
+  // carregar `getStockRows` inteiro (que também traz unidades INDIVIDUAL,
+  // irrelevantes aqui) só pra somar em memória.
+  const balances = await prisma.stockBalance.groupBy({
+    by: ["assetId"],
+    where: { companyId, assetId: { in: assetsWithMinimum.map((asset) => asset.id) } },
+    _sum: { quantity: true },
+  });
+  const totalByAsset = new Map(balances.map((row) => [row.assetId, toNumber(row._sum.quantity ?? 0)]));
 
   const alerts: Alert[] = [];
   for (const asset of assetsWithMinimum) {

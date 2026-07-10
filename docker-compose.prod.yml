@@ -1,0 +1,137 @@
+# Compose de PRODUÇÃO — diferente do docker-compose.yml (raiz), que só sobe
+# um Postgres solto pra desenvolvimento local. Uso sempre explícito:
+#   docker compose -f docker-compose.prod.yml --env-file .env.production <comando>
+# (ver docs/deployment.md para o passo a passo completo).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: patrium_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # Sem publicar porta pro host — só a rede interna do compose fala com o
+    # Postgres (diferente do docker-compose.yml de dev, que expõe 5433).
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - patrium_net
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: patrium_app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL}
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL}
+      EVOLUTION_API_ADMIN_KEY: ${EVOLUTION_API_ADMIN_KEY}
+      SENTRY_DSN: ${SENTRY_DSN}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+      LOG_LEVEL: ${LOG_LEVEL}
+      METRICS_TOKEN: ${METRICS_TOKEN}
+    # Sem publicar porta pro host — só o nginx fala com o app (rede
+    # interna). A porta 3000 é a da imagem (ver Dockerfile), não a 3010 do
+    # `npm run dev`/`start` direto no host — não há conflito nenhum pra
+    # evitar aqui dentro do container.
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "--tries=1", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - patrium_net
+
+  # Serviço de ferramentas — NUNCA sobe com `docker compose up` (perfil
+  # "tools" só roda sob demanda). Usa o estágio `builder` do mesmo
+  # Dockerfile, que tem o node_modules completo (prisma CLI, tsx,
+  # typescript) — o `app` roda só o output enxuto de `output: standalone` e
+  # não tem essas ferramentas. Uso:
+  #   docker compose -f docker-compose.prod.yml --env-file .env.production \
+  #     run --rm migrate npx prisma migrate deploy
+  #   docker compose -f docker-compose.prod.yml --env-file .env.production \
+  #     run --rm migrate npx prisma db seed
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    profiles: ["tools"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+    networks:
+      - patrium_net
+
+  nginx:
+    image: nginx:alpine
+    container_name: patrium_nginx
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
+    networks:
+      patrium_net:
+        # IP fixo — é este endereço que `lib/auth.ts` (`TRUSTED_PROXIES`)
+        # confia para "desembrulhar" X-Forwarded-For. Se mudar aqui, mudar
+        # lá também.
+        ipv4_address: 172.28.0.10
+
+  certbot:
+    image: certbot/certbot
+    container_name: patrium_certbot
+    restart: unless-stopped
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    # Loop de renovação — sem precisar de cron no host. `certbot renew` só
+    # renova certificados a menos de 30 dias do vencimento, então rodar a
+    # cada 12h é seguro/idempotente.
+    entrypoint: >
+      /bin/sh -c "trap exit TERM;
+      while :; do
+        certbot renew --webroot -w /var/www/certbot --quiet;
+        sleep 12h & wait $${!};
+      done"
+    networks:
+      - patrium_net
+
+networks:
+  patrium_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+volumes:
+  postgres_data:

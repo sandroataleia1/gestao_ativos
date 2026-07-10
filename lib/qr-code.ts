@@ -65,6 +65,7 @@ export type QrLookup =
       type: "ASSET";
       companyId: string;
       companyName: string;
+      companyLogoDataUrl: string | null;
       status: string;
       resource: {
         id: string;
@@ -81,6 +82,7 @@ export type QrLookup =
       type: "ASSET_UNIT";
       companyId: string;
       companyName: string;
+      companyLogoDataUrl: string | null;
       status: string;
       resource: {
         id: string;
@@ -99,6 +101,7 @@ export type QrLookup =
       type: "CUSTODY";
       companyId: string;
       companyName: string;
+      companyLogoDataUrl: string | null;
       status: string;
       resource: {
         id: string;
@@ -127,13 +130,14 @@ export type QrLookup =
 export async function resolveQrToken(token: string): Promise<QrLookup | null> {
   const asset = await prisma.asset.findUnique({
     where: { qrCodeToken: token },
-    include: { company: { select: { name: true } }, category: true, status: true, condition: true },
+    include: { company: { select: { name: true, logoDataUrl: true } }, category: true, status: true, condition: true },
   });
   if (asset) {
     return {
       type: "ASSET",
       companyId: asset.companyId,
       companyName: asset.company.name,
+      companyLogoDataUrl: asset.company.logoDataUrl,
       status: asset.active ? asset.status.name : "Inativo",
       resource: {
         id: asset.id,
@@ -151,7 +155,7 @@ export async function resolveQrToken(token: string): Promise<QrLookup | null> {
   const unit = await prisma.assetUnit.findUnique({
     where: { qrCodeToken: token },
     include: {
-      company: { select: { name: true } },
+      company: { select: { name: true, logoDataUrl: true } },
       asset: { select: { id: true, name: true, assetCode: true } },
       status: true,
       condition: true,
@@ -163,6 +167,7 @@ export async function resolveQrToken(token: string): Promise<QrLookup | null> {
       type: "ASSET_UNIT",
       companyId: unit.companyId,
       companyName: unit.company.name,
+      companyLogoDataUrl: unit.company.logoDataUrl,
       status: unit.active ? unit.status.name : "Inativo",
       resource: {
         id: unit.id,
@@ -182,7 +187,7 @@ export async function resolveQrToken(token: string): Promise<QrLookup | null> {
   const custody = await prisma.assetCustody.findUnique({
     where: { qrCodeToken: token },
     include: {
-      company: { select: { name: true } },
+      company: { select: { name: true, logoDataUrl: true } },
       employee: { select: { name: true } },
       asset: { select: { id: true, name: true, assetCode: true, defaultUnit: true } },
       assetUnit: { select: { serialNumber: true, patrimonyNumber: true } },
@@ -197,6 +202,7 @@ export async function resolveQrToken(token: string): Promise<QrLookup | null> {
       type: "CUSTODY",
       companyId: custody.companyId,
       companyName: custody.company.name,
+      companyLogoDataUrl: custody.company.logoDataUrl,
       status: custody.status === "ACTIVE" ? "Em posse do colaborador" : "Devolvida",
       resource: {
         id: custody.id,

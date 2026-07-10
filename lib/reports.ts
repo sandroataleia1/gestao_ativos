@@ -1,3 +1,4 @@
+import type { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getStockRows, type StockFilters } from "@/lib/stock";
 import { custodyListInclude, serializeCustody, toNumber } from "@/lib/custodies";
@@ -8,16 +9,11 @@ import { dateOnlyToEndOfDayISOStringSafe, dateOnlyToISOStringSafe } from "@/lib/
 // client) — mesma regra do resto do app. Nenhuma rota deste módulo escreve
 // dado nenhum; são só agregações de leitura sobre os models já existentes.
 
-function groupCount<T>(rows: T[], keyFn: (row: T) => string) {
-  const map = new Map<string, number>();
-  for (const row of rows) {
-    const key = keyFn(row);
-    map.set(key, (map.get(key) ?? 0) + 1);
-  }
-  return Array.from(map.entries())
-    .map(([label, count]) => ({ label, count }))
-    .sort((a, b) => b.count - a.count);
-}
+// Teto de linhas exportadas/exibidas por relatório — os totais/somas do
+// resumo (summary) NÃO dependem deste teto: vêm de count/groupBy separados
+// no banco, então continuam corretos para a empresa inteira mesmo quando a
+// tabela em si mostra só uma amostra (ver docs/performance.md).
+const REPORT_ROW_LIMIT = 1000;
 
 // `dateFrom`/`dateTo` vêm de `<input type="date">` (filtros de período) —
 // nunca `new Date(dateFrom)` diretamente: `dateFrom` é o início do dia
@@ -50,22 +46,55 @@ export async function getAssetsReport(companyId: string, filters: AssetsReportFi
   const { categoryId, statusId, conditionId, assetId, dateFrom, dateTo } = filters;
   const createdAtFilter = dateRangeFilter(dateFrom, dateTo);
 
-  const assets = await prisma.asset.findMany({
-    where: {
-      companyId,
-      ...(assetId ? { id: assetId } : {}),
-      ...(categoryId ? { categoryId } : {}),
-      ...(statusId ? { statusId } : {}),
-      ...(conditionId ? { conditionId } : {}),
-      ...(createdAtFilter ? { createdAt: createdAtFilter } : {}),
-    },
-    include: {
-      category: { select: { name: true } },
-      status: { select: { name: true, color: true } },
-      condition: { select: { name: true } },
-    },
-    orderBy: { name: "asc" },
-  });
+  const where: Prisma.AssetWhereInput = {
+    companyId,
+    ...(assetId ? { id: assetId } : {}),
+    ...(categoryId ? { categoryId } : {}),
+    ...(statusId ? { statusId } : {}),
+    ...(conditionId ? { conditionId } : {}),
+    ...(createdAtFilter ? { createdAt: createdAtFilter } : {}),
+  };
+
+  // Totais/quebras vêm de count/groupBy no banco (nunca de `.length`/reduce
+  // sobre o array de linhas) — refletem a empresa inteira mesmo quando
+  // `assets` abaixo é limitado a REPORT_ROW_LIMIT.
+  const [assets, total, activeCount, byCategoryRaw, byStatusRaw, byConditionRaw, categories, statuses, conditions] =
+    await Promise.all([
+      prisma.asset.findMany({
+        where,
+        include: {
+          category: { select: { name: true } },
+          status: { select: { name: true, color: true } },
+          condition: { select: { name: true } },
+        },
+        orderBy: { name: "asc" },
+        take: REPORT_ROW_LIMIT,
+      }),
+      prisma.asset.count({ where }),
+      prisma.asset.count({ where: { ...where, active: true } }),
+      prisma.asset.groupBy({ by: ["categoryId"], where, _count: { _all: true } }),
+      prisma.asset.groupBy({ by: ["statusId"], where, _count: { _all: true } }),
+      prisma.asset.groupBy({ by: ["conditionId"], where, _count: { _all: true } }),
+      prisma.assetCategory.findMany({ where: { companyId }, select: { id: true, name: true } }),
+      prisma.assetStatus.findMany({ where: { companyId }, select: { id: true, name: true } }),
+      prisma.assetCondition.findMany({ where: { companyId }, select: { id: true, name: true } }),
+    ]);
+
+  const categoryName = new Map(categories.map((c) => [c.id, c.name]));
+  const statusName = new Map(statuses.map((s) => [s.id, s.name]));
+  const conditionName = new Map(conditions.map((c) => [c.id, c.name]));
+
+  const toBreakdown = (
+    raw: { _count: { _all: number } }[],
+    idKey: "categoryId" | "statusId" | "conditionId",
+    nameById: Map<string, string>,
+  ) =>
+    raw
+      .map((row) => ({
+        label: nameById.get((row as unknown as Record<string, string>)[idKey]) ?? "—",
+        count: row._count._all,
+      }))
+      .sort((a, b) => b.count - a.count);
 
   const rows = assets.map((asset) => ({
     id: asset.id,
@@ -82,12 +111,12 @@ export async function getAssetsReport(companyId: string, filters: AssetsReportFi
   return {
     rows,
     summary: {
-      total: rows.length,
-      active: rows.filter((row) => row.active).length,
-      inactive: rows.filter((row) => !row.active).length,
-      byCategory: groupCount(rows, (row) => row.category),
-      byStatus: groupCount(rows, (row) => row.status),
-      byCondition: groupCount(rows, (row) => row.condition),
+      total,
+      active: activeCount,
+      inactive: total - activeCount,
+      byCategory: toBreakdown(byCategoryRaw, "categoryId", categoryName),
+      byStatus: toBreakdown(byStatusRaw, "statusId", statusName),
+      byCondition: toBreakdown(byConditionRaw, "conditionId", conditionName),
     },
   };
 }
@@ -132,20 +161,47 @@ export type CustodiesReportFilters = {
 export async function getCustodiesReport(companyId: string, filters: CustodiesReportFilters = {}) {
   const { employeeId, assetId, status, locationId, dateFrom, dateTo } = filters;
   const deliveredAtFilter = dateRangeFilter(dateFrom, dateTo);
+  const now = new Date();
 
-  const custodies = await prisma.assetCustody.findMany({
-    where: {
-      companyId,
-      ...(employeeId ? { employeeId } : {}),
-      ...(assetId ? { assetId } : {}),
-      ...(status ? { status } : {}),
-      ...(locationId ? { holderLocationId: locationId } : {}),
-      ...(deliveredAtFilter ? { deliveredAt: deliveredAtFilter } : {}),
-    },
-    include: custodyListInclude,
-    orderBy: { deliveredAt: "desc" },
-    take: 1000,
+  const where: Prisma.AssetCustodyWhereInput = {
+    companyId,
+    ...(employeeId ? { employeeId } : {}),
+    ...(assetId ? { assetId } : {}),
+    ...(status ? { status } : {}),
+    ...(locationId ? { holderLocationId: locationId } : {}),
+    ...(deliveredAtFilter ? { deliveredAt: deliveredAtFilter } : {}),
+  };
+  const activeWhere: Prisma.AssetCustodyWhereInput = { ...where, status: "ACTIVE" };
+  // Usa o índice composto (companyId, status, expectedReturnAt).
+  const overdueWhere: Prisma.AssetCustodyWhereInput = { ...activeWhere, expectedReturnAt: { lt: now } };
+
+  const [custodies, total, activeCount, overdueCount, byEmployeeRaw] = await Promise.all([
+    prisma.assetCustody.findMany({
+      where,
+      include: custodyListInclude,
+      orderBy: { deliveredAt: "desc" },
+      take: REPORT_ROW_LIMIT,
+    }),
+    prisma.assetCustody.count({ where }),
+    prisma.assetCustody.count({ where: activeWhere }),
+    prisma.assetCustody.count({ where: overdueWhere }),
+    // Top colaboradores por quantidade em posse — no banco inteiro, não só
+    // nas REPORT_ROW_LIMIT linhas carregadas acima.
+    prisma.assetCustody.groupBy({
+      by: ["employeeId"],
+      where: activeWhere,
+      _sum: { quantity: true },
+      _count: { _all: true },
+      orderBy: { _sum: { quantity: "desc" } },
+      take: 20,
+    }),
+  ]);
+
+  const employees = await prisma.employee.findMany({
+    where: { id: { in: byEmployeeRaw.map((row) => row.employeeId) } },
+    select: { id: true, name: true },
   });
+  const employeeNameById = new Map(employees.map((employee) => [employee.id, employee.name]));
 
   const rows = custodies.map((custody) => ({
     ...serializeCustody(custody),
@@ -158,34 +214,18 @@ export async function getCustodiesReport(companyId: string, filters: CustodiesRe
     }),
   }));
 
-  const activeRows = rows.filter((row) => row.status === "ACTIVE");
-
-  const byEmployeeMap = new Map<
-    string,
-    { employeeId: string; name: string; items: number; quantity: number }
-  >();
-  for (const row of activeRows) {
-    const existing = byEmployeeMap.get(row.employeeId);
-    if (existing) {
-      existing.items += 1;
-      existing.quantity += row.quantity;
-    } else {
-      byEmployeeMap.set(row.employeeId, {
-        employeeId: row.employeeId,
-        name: row.employee.name,
-        items: 1,
-        quantity: row.quantity,
-      });
-    }
-  }
-
   return {
     rows,
     summary: {
-      total: rows.length,
-      active: activeRows.length,
-      overdue: activeRows.filter((row) => row.overdue).length,
-      byEmployee: Array.from(byEmployeeMap.values()).sort((a, b) => b.quantity - a.quantity),
+      total,
+      active: activeCount,
+      overdue: overdueCount,
+      byEmployee: byEmployeeRaw.map((row) => ({
+        employeeId: row.employeeId,
+        name: employeeNameById.get(row.employeeId) ?? "—",
+        items: row._count._all,
+        quantity: toNumber(row._sum.quantity ?? 0),
+      })),
     },
   };
 }
@@ -207,20 +247,29 @@ export async function getExpiringCaReport(companyId: string, filters: ExpiringCa
   const now = new Date();
   const horizon = new Date(now.getTime() + withinDays * DAY_MS);
 
-  const certifications = await prisma.assetCertification.findMany({
-    where: {
-      companyId,
-      certificationType: "CA",
-      status: { in: ["VALID", "EXPIRED"] },
-      expirationDate: { not: null, lte: horizon },
-      ...(assetId ? { assetId } : {}),
-      ...(categoryId ? { asset: { categoryId } } : {}),
-    },
-    include: {
-      asset: { select: { id: true, name: true, assetCode: true, category: { select: { name: true } } } },
-    },
-    orderBy: { expirationDate: "asc" },
-  });
+  // Índice composto (companyId, certificationType, status, expirationDate)
+  // cobre exatamente este filtro (ver prisma/schema.prisma).
+  const where: Prisma.AssetCertificationWhereInput = {
+    companyId,
+    certificationType: "CA",
+    status: { in: ["VALID", "EXPIRED"] },
+    expirationDate: { not: null, lte: horizon },
+    ...(assetId ? { assetId } : {}),
+    ...(categoryId ? { asset: { categoryId } } : {}),
+  };
+
+  const [certifications, total, expiredCount] = await Promise.all([
+    prisma.assetCertification.findMany({
+      where,
+      include: {
+        asset: { select: { id: true, name: true, assetCode: true, category: { select: { name: true } } } },
+      },
+      orderBy: { expirationDate: "asc" },
+      take: REPORT_ROW_LIMIT,
+    }),
+    prisma.assetCertification.count({ where }),
+    prisma.assetCertification.count({ where: { ...where, expirationDate: { not: null, lt: now } } }),
+  ]);
 
   const rows = certifications.map((certification) => {
     const expirationDate = certification.expirationDate!;
@@ -242,9 +291,9 @@ export async function getExpiringCaReport(companyId: string, filters: ExpiringCa
   return {
     rows,
     summary: {
-      total: rows.length,
-      expired: rows.filter((row) => row.bucket === "EXPIRED").length,
-      expiringSoon: rows.filter((row) => row.bucket === "EXPIRING_SOON").length,
+      total,
+      expired: expiredCount,
+      expiringSoon: total - expiredCount,
     },
   };
 }

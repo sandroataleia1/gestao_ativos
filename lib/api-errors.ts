@@ -3,6 +3,8 @@ import { ZodError, flattenError } from "zod";
 
 import { AuthError, ForbiddenError } from "@/lib/auth-server";
 import { Prisma } from "@/app/generated/prisma/client";
+import { captureException } from "@/lib/monitoring";
+import { logError } from "@/lib/logger";
 
 export class NotFoundError extends Error {
   constructor(message = "Registro não encontrado.") {
@@ -63,6 +65,16 @@ export function handleApiError(error: unknown) {
     );
   }
 
-  console.error(error);
+  // `handleApiError` é síncrona (mudar isso exigiria `await` em toda rota
+  // que já a chama) — `logError` é async só porque lê o request id via
+  // `next/headers()`, então dispara sem aguardar ("fire and forget");
+  // seguro aqui porque o processo (PM2) continua rodando depois da
+  // resposta, não é uma function serverless que poderia matar o processo
+  // antes da promise terminar.
+  void logError("unhandled_api_error", {
+    message: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  });
+  captureException(error);
   return NextResponse.json({ error: "Erro interno do servidor." }, { status: 500 });
 }

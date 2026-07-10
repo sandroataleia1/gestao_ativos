@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 
+import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
 import { handleApiError } from "@/lib/api-errors";
 import { parseImportFormData, processImportFile } from "@/lib/imports/process";
+import { logAudit } from "@/lib/audit";
 
 // Grava de verdade — cada linha em sua própria transação (ver
 // lib/imports/process.ts): uma falha isolada não desfaz linhas já
@@ -16,6 +18,17 @@ export async function POST(request: Request) {
     const { type, buffer } = await parseImportFormData(request);
 
     const result = await processImportFile({ type, buffer, companyId, userId: user.id, dryRun: false });
+
+    // Um log por importação confirmada (nunca no preview/dry-run) — só o
+    // resumo agregado (contagens), nunca dado de linha/planilha.
+    await logAudit(prisma, {
+      companyId,
+      actorUserId: user.id,
+      actorName: user.name,
+      action: "import.run",
+      targetType: "Import",
+      metadata: { type, summary: result.summary },
+    });
 
     return NextResponse.json(result);
   } catch (error) {

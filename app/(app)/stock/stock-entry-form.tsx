@@ -177,7 +177,7 @@ export function StockEntryForm({
                       disabled={isSubmitting}
                     />
                     <p className="text-xs text-muted-foreground">
-                      Uma unidade (AssetUnit) será criada para cada linha.
+                      Uma unidade será criada para cada linha.
                     </p>
                   </div>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

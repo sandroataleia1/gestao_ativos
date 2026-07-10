@@ -292,6 +292,395 @@ async function seedDemoStockEntry(companyId: string, locationId: string, movemen
   ]);
 }
 
+// ---------------------------------------------------------------------------
+// Catálogo global de modelos de treinamento (TrainingTemplate) — não é
+// dado por empresa (sem companyId), roda uma vez para o banco inteiro, igual
+// a ensurePermissionCatalog(). Dados coerentes mas não 100% precisos
+// legalmente (ver docs/trainings-domain.md) — fáceis de editar depois.
+// ---------------------------------------------------------------------------
+
+const TRAINING_TEMPLATES: Array<{
+  title: string;
+  code: string;
+  category: string;
+  trainingType: "LEGAL" | "CORPORATE";
+  nrReference?: string;
+  defaultValidityMonths?: number;
+  defaultWorkloadHours?: number;
+  requiresCertificate: boolean;
+  requiresAttendanceList: boolean;
+  requiresSignature: boolean;
+  requiresExam: boolean;
+  minimumPassingGrade?: number;
+  defaultInstructorType: "INTERNAL" | "EXTERNAL" | "BOTH";
+}> = [
+  {
+    title: "Integração",
+    code: "INTEGRACAO",
+    category: "Integração",
+    trainingType: "CORPORATE",
+    defaultWorkloadHours: 4,
+    requiresCertificate: false,
+    requiresAttendanceList: true,
+    requiresSignature: true,
+    requiresExam: false,
+    defaultInstructorType: "INTERNAL",
+  },
+  {
+    title: "NR-01 - Disposições Gerais e Gerenciamento de Riscos Ocupacionais",
+    code: "NR-01",
+    category: "Segurança do Trabalho",
+    trainingType: "LEGAL",
+    nrReference: "NR-01",
+    defaultValidityMonths: 24,
+    defaultWorkloadHours: 2,
+    requiresCertificate: true,
+    requiresAttendanceList: true,
+    requiresSignature: true,
+    requiresExam: false,
+    defaultInstructorType: "BOTH",
+  },
+  {
+    title: "NR-05 - CIPA",
+    code: "NR-05",
+    category: "Segurança do Trabalho",
+    trainingType: "LEGAL",
+    nrReference: "NR-05",
+    defaultValidityMonths: 12,
+    defaultWorkloadHours: 20,
+    requiresCertificate: true,
+    requiresAttendanceList: true,
+    requiresSignature: true,
+    requiresExam: false,
+    defaultInstructorType: "EXTERNAL",
+  },
+  {
+    title: "NR-06 - Equipamento de Proteção Individual",
+    code: "NR-06",
+    category: "Segurança do Trabalho",
+    trainingType: "LEGAL",
+    nrReference: "NR-06",
+    defaultValidityMonths: 12,
+    defaultWorkloadHours: 2,
+    requiresCertificate: true,
+    requiresAttendanceList: true,
+    requiresSignature: true,
+    requiresExam: false,
+    defaultInstructorType: "BOTH",
+  },
+  {
+    title: "NR-10 - Segurança em Instalações e Serviços em Eletricidade",
+    code: "NR-10",
+    category: "Segurança do Trabalho",
+    trainingType: "LEGAL",
+    nrReference: "NR-10",
+    defaultValidityMonths: 24,
+    defaultWorkloadHours: 40,
+    requiresCertificate: true,
+    requiresAttendanceList: true,
+    requiresSignature: true,
+    requiresExam: true,
+    minimumPassingGrade: 70,
+    defaultInstructorType: "EXTERNAL",
+  },
+  {
+    title: "NR-11 - Transporte, Movimentação, Armazenagem e Manuseio de Materiais",
+    code: "NR-11",
+    category: "Segurança do Trabalho",
+    trainingType: "LEGAL",
+    nrReference: "NR-11",
+    defaultValidityMonths: 12,
+    defaultWorkloadHours: 16,
+    requiresCertificate: true,
+    requiresAttendanceList: true,
+    requiresSignature: true,
+    requiresExam: true,
+    minimumPassingGrade: 70,
+    defaultInstructorType: "EXTERNAL",
+  },
+  {
+    title: "NR-12 - Segurança no Trabalho em Máquinas e Equipamentos",
+    code: "NR-12",
+    category: "Segurança do Trabalho",
+    trainingType: "LEGAL",
+    nrReference: "NR-12",
+    defaultValidityMonths: 24,
+    defaultWorkloadHours: 8,
+    requiresCertificate: true,
+    requiresAttendanceList: true,
+    requiresSignature: true,
+    requiresExam: false,
+    defaultInstructorType: "BOTH",
+  },
+  {
+    title: "NR-18 - Condições de Segurança na Construção Civil",
+    code: "NR-18",
+    category: "Segurança do Trabalho",
+    trainingType: "LEGAL",
+    nrReference: "NR-18",
+    defaultValidityMonths: 12,
+    defaultWorkloadHours: 8,
+    requiresCertificate: true,
+    requiresAttendanceList: true,
+    requiresSignature: true,
+    requiresExam: false,
+    defaultInstructorType: "EXTERNAL",
+  },
+  {
+    title: "NR-20 - Segurança e Saúde no Trabalho com Inflamáveis e Combustíveis",
+    code: "NR-20",
+    category: "Segurança do Trabalho",
+    trainingType: "LEGAL",
+    nrReference: "NR-20",
+    defaultValidityMonths: 12,
+    defaultWorkloadHours: 8,
+    requiresCertificate: true,
+    requiresAttendanceList: true,
+    requiresSignature: true,
+    requiresExam: true,
+    minimumPassingGrade: 70,
+    defaultInstructorType: "EXTERNAL",
+  },
+  {
+    title: "NR-23 - Proteção Contra Incêndios",
+    code: "NR-23",
+    category: "Segurança do Trabalho",
+    trainingType: "LEGAL",
+    nrReference: "NR-23",
+    defaultValidityMonths: 12,
+    defaultWorkloadHours: 4,
+    requiresCertificate: true,
+    requiresAttendanceList: true,
+    requiresSignature: true,
+    requiresExam: false,
+    defaultInstructorType: "BOTH",
+  },
+  {
+    title: "NR-33 - Segurança e Saúde em Espaços Confinados",
+    code: "NR-33",
+    category: "Segurança do Trabalho",
+    trainingType: "LEGAL",
+    nrReference: "NR-33",
+    defaultValidityMonths: 12,
+    defaultWorkloadHours: 16,
+    requiresCertificate: true,
+    requiresAttendanceList: true,
+    requiresSignature: true,
+    requiresExam: true,
+    minimumPassingGrade: 70,
+    defaultInstructorType: "EXTERNAL",
+  },
+  {
+    title: "NR-35 - Trabalho em Altura",
+    code: "NR-35",
+    category: "Segurança do Trabalho",
+    trainingType: "LEGAL",
+    nrReference: "NR-35",
+    defaultValidityMonths: 24,
+    defaultWorkloadHours: 8,
+    requiresCertificate: true,
+    requiresAttendanceList: true,
+    requiresSignature: true,
+    requiresExam: true,
+    minimumPassingGrade: 70,
+    defaultInstructorType: "EXTERNAL",
+  },
+  {
+    title: "Brigada de Incêndio",
+    code: "BRIGADA",
+    category: "Emergência",
+    trainingType: "LEGAL",
+    nrReference: "NR-23",
+    defaultValidityMonths: 12,
+    defaultWorkloadHours: 16,
+    requiresCertificate: true,
+    requiresAttendanceList: true,
+    requiresSignature: true,
+    requiresExam: true,
+    minimumPassingGrade: 70,
+    defaultInstructorType: "EXTERNAL",
+  },
+  {
+    title: "Primeiros Socorros",
+    code: "PRIMEIROS-SOCORROS",
+    category: "Emergência",
+    trainingType: "CORPORATE",
+    defaultValidityMonths: 24,
+    defaultWorkloadHours: 8,
+    requiresCertificate: true,
+    requiresAttendanceList: true,
+    requiresSignature: true,
+    requiresExam: false,
+    defaultInstructorType: "EXTERNAL",
+  },
+];
+
+/**
+ * Idempotente via upsert por `code` (único globalmente). No `update`,
+ * resincroniza os campos descritivos (mesmo padrão de
+ * ensurePermissionCatalog) — editar TRAINING_TEMPLATES e rodar o seed de
+ * novo propaga a mudança. `active`/`version` não são tocados no update: uma
+ * desativação manual feita direto no banco não deve ser desfeita só por
+ * rodar o seed de novo.
+ */
+async function seedTrainingTemplates() {
+  for (const template of TRAINING_TEMPLATES) {
+    await prisma.trainingTemplate.upsert({
+      where: { code: template.code },
+      update: {
+        title: template.title,
+        category: template.category,
+        trainingType: template.trainingType,
+        nrReference: template.nrReference,
+        defaultValidityMonths: template.defaultValidityMonths,
+        defaultWorkloadHours: template.defaultWorkloadHours,
+        requiresCertificate: template.requiresCertificate,
+        requiresAttendanceList: template.requiresAttendanceList,
+        requiresSignature: template.requiresSignature,
+        requiresExam: template.requiresExam,
+        minimumPassingGrade: template.minimumPassingGrade,
+        defaultInstructorType: template.defaultInstructorType,
+      },
+      create: { ...template, version: 1, active: true },
+    });
+  }
+  return TRAINING_TEMPLATES.length;
+}
+
+// ---------------------------------------------------------------------------
+// Prestador SST demo — ilustra o fluxo ponta a ponta de gestão por
+// consultoria externa (ver docs/sst-providers.md). Idempotente: upsert do
+// vínculo por [providerId, companyId]; o provider em si usa findFirst/create
+// (sem campo único além do id, mesmo padrão de seedAssetLookups).
+// ---------------------------------------------------------------------------
+
+const DEMO_SST_PROVIDER_NAME = "Consultoria SST Demo";
+
+async function seedSstProviderDemo(companyId: string, adminUserId: string) {
+  let provider = await prisma.sstProvider.findFirst({ where: { name: DEMO_SST_PROVIDER_NAME } });
+  if (!provider) {
+    provider = await prisma.sstProvider.create({
+      data: {
+        name: DEMO_SST_PROVIDER_NAME,
+        document: "00.000.000/0002-00",
+        email: "contato@consultoriasstdemo.com.br",
+        phone: "(11) 4000-0000",
+      },
+    });
+  }
+
+  await prisma.sstProviderCompany.upsert({
+    where: { providerId_companyId: { providerId: provider.id, companyId } },
+    update: {},
+    create: {
+      providerId: provider.id,
+      companyId,
+      status: "ACTIVE",
+      accessLevel: "ADMINISTRATION",
+      approvedByUserId: adminUserId,
+      approvedAt: new Date(),
+    },
+  });
+
+  return provider;
+}
+
+/** Um CompanyTraining demo gerenciado pela consultoria (NR-33), para o
+ * ambiente demo mostrar o caso de uso completo. Idempotente via findFirst
+ * (CompanyTraining não tem campo único além do id). */
+async function seedDemoCompanyTraining(companyId: string, providerId: string) {
+  const existing = await prisma.companyTraining.findFirst({
+    where: { companyId, managementMode: "EXTERNAL_PROVIDER" },
+  });
+  if (existing) return existing;
+
+  const template = await prisma.trainingTemplate.findUnique({ where: { code: "NR-33" } });
+  if (!template) return null;
+
+  return prisma.companyTraining.create({
+    data: {
+      companyId,
+      trainingTemplateId: template.id,
+      title: template.title,
+      description: template.description,
+      category: template.category,
+      trainingType: template.trainingType,
+      nrReference: template.nrReference,
+      validityMonths: template.defaultValidityMonths,
+      workloadHours: template.defaultWorkloadHours,
+      requiresCertificate: template.requiresCertificate,
+      requiresAttendanceList: template.requiresAttendanceList,
+      requiresSignature: template.requiresSignature,
+      requiresExam: template.requiresExam,
+      minimumPassingGrade: template.minimumPassingGrade,
+      instructorType: template.defaultInstructorType,
+      managementMode: "EXTERNAL_PROVIDER",
+      managedByProviderId: providerId,
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Portal Consultoria SST demo — Sprint Comercial 1.1 (ver
+// docs/portal-consultoria.md). Provider DISTINTO de "Consultoria SST Demo"
+// acima: aquele ilustra um CompanyTraining EXTERNAL_PROVIDER do lado da
+// empresa; este é o login de demonstração do próprio Portal Consultoria
+// (/sst). O User criado aqui precisa de um companyId só para satisfazer a
+// constraint NOT NULL do schema — isso é IRRELEVANTE para o Portal
+// Consultoria, que nunca lê User.companyId (o tenant do portal é sempre
+// SstProvider, via SstProviderUser/SstProviderCompany).
+// ---------------------------------------------------------------------------
+
+const SST_PORTAL_PROVIDER_NAME = "Consultoria Segura SST";
+const SST_PORTAL_USER_EMAIL = "sst@demo.com";
+const SST_PORTAL_USER_PASSWORD = "Demo@12345";
+
+async function seedSstPortalDemo(companyId: string) {
+  let provider = await prisma.sstProvider.findFirst({ where: { name: SST_PORTAL_PROVIDER_NAME } });
+  if (!provider) {
+    provider = await prisma.sstProvider.create({
+      data: {
+        name: SST_PORTAL_PROVIDER_NAME,
+        document: "00.000.000/0003-00",
+        email: "contato@consultoriaseguransst.com.br",
+        phone: "(11) 4000-1111",
+      },
+    });
+  }
+
+  let user = await prisma.user.findUnique({ where: { email: SST_PORTAL_USER_EMAIL } });
+  if (!user) {
+    const result = await signUpEmailInternal({
+      name: "Técnico Consultoria Segura SST",
+      email: SST_PORTAL_USER_EMAIL,
+      password: SST_PORTAL_USER_PASSWORD,
+      companyId,
+    });
+    user = await prisma.user.findUniqueOrThrow({ where: { id: result.user.id } });
+  }
+
+  await prisma.sstProviderUser.upsert({
+    where: { providerId_userId: { providerId: provider.id, userId: user.id } },
+    update: { active: true },
+    create: { providerId: provider.id, userId: user.id, role: "OWNER", active: true },
+  });
+
+  await prisma.sstProviderCompany.upsert({
+    where: { providerId_companyId: { providerId: provider.id, companyId } },
+    update: {},
+    create: {
+      providerId: provider.id,
+      companyId,
+      status: "ACTIVE",
+      accessLevel: "ADMINISTRATION",
+      approvedByUserId: user.id,
+      approvedAt: new Date(),
+    },
+  });
+
+  return { provider, user };
+}
+
 /**
  * Sincroniza o catálogo de permissões/papéis padrão em TODAS as empresas já
  * existentes — não só a demo. `provisionDefaultRolesForCompany` é idempotente
@@ -340,6 +729,10 @@ async function main() {
   await seedAssets(company.id);
   const { location, movementTypes } = await seedStockSetup(company.id);
   await seedDemoStockEntry(company.id, location.id, movementTypes.get("ENTRY")!);
+  const trainingTemplateCount = await seedTrainingTemplates();
+  const sstProvider = await seedSstProviderDemo(company.id, admin.id);
+  await seedDemoCompanyTraining(company.id, sstProvider.id);
+  const sstPortalDemo = await seedSstPortalDemo(company.id);
   const companyCount = await backfillPermissionsForAllCompanies();
   const lookupCompanyCount = await backfillAssetLookupsForAllCompanies();
   const stockSetupCompanyCount = await backfillStockSetupForAllCompanies();
@@ -354,6 +747,11 @@ async function main() {
   console.log(`  Colaboradores demo: ${DEMO_EMPLOYEES.length}`);
   console.log(`  Ativos demo: ${DEMO_ASSETS.length}`);
   console.log(`  Local padrão: ${location.name}`);
+  console.log(`  Modelos de treinamento: ${trainingTemplateCount}`);
+  console.log(`  Prestador SST demo: ${sstProvider.name} (vínculo ACTIVE/ADMINISTRATION)`);
+  console.log(
+    `  Portal Consultoria SST: ${sstPortalDemo.provider.name} — login: ${sstPortalDemo.user.email} / senha: ${SST_PORTAL_USER_PASSWORD}`,
+  );
   console.log(`  Permissões sincronizadas em ${companyCount} empresa(s)`);
   console.log(`  Status/Condição sincronizados em ${lookupCompanyCount} empresa(s)`);
   console.log(`  Local/tipos de movimentação sincronizados em ${stockSetupCompanyCount} empresa(s)`);

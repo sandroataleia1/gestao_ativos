@@ -1,17 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import {
-  type ColumnDef,
-  type SortingState,
-  flexRender,
-  getCoreRowModel,
-  getSortedRowModel,
-  useReactTable,
-} from "@tanstack/react-table";
+import { useMemo } from "react";
+import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { PlusIcon } from "lucide-react";
+import { type ColumnDef, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 
 import { Badge } from "@/components/ui/badge";
-import { SortableHeader } from "@/components/ui/data-table-column-header";
+import { Button } from "@/components/ui/button";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import {
   Table,
   TableBody,
@@ -37,52 +34,57 @@ function formatDateTime(iso: string) {
 
 export function StockMovementsTable({
   initialMovements,
+  total,
+  page,
+  pageSize,
   assets,
   locations,
   movementTypes,
+  canManage,
 }: {
   initialMovements: StockMovementRow[];
+  total: number;
+  page: number;
+  pageSize: number;
   assets: AssetOption[];
   locations: LookupOption[];
   movementTypes: LookupOption[];
+  canManage?: boolean;
 }) {
-  const [assetFilter, setAssetFilter] = useState(ALL_VALUE);
-  const [locationFilter, setLocationFilter] = useState(ALL_VALUE);
-  const [typeFilter, setTypeFilter] = useState(ALL_VALUE);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
 
-  const filtered = useMemo(() => {
-    return initialMovements.filter((movement) => {
-      if (assetFilter !== ALL_VALUE && movement.asset.id !== assetFilter) return false;
-      if (typeFilter !== ALL_VALUE && movement.movementType.id !== typeFilter) return false;
-      if (
-        locationFilter !== ALL_VALUE &&
-        movement.originLocation?.id !== locationFilter &&
-        movement.destinationLocation?.id !== locationFilter
-      ) {
-        return false;
-      }
-      return true;
-    });
-  }, [initialMovements, assetFilter, locationFilter, typeFilter]);
+  function applyFilter(key: string, value: string | undefined) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (!value || value === ALL_VALUE) params.delete(key);
+    else params.set(key, value);
+    params.delete("movPage");
+    router.push(`${pathname}?${params.toString()}`);
+  }
+
+  const hasActiveFilters = Boolean(
+    searchParams.get("movAssetId") || searchParams.get("movTypeId") || searchParams.get("movLocationId"),
+  );
 
   const columns = useMemo<ColumnDef<StockMovementRow>[]>(
     () => [
       {
         id: "executedAt",
         accessorFn: (row) => row.executedAt,
-        header: ({ column }) => <SortableHeader column={column} label="Data" />,
+        header: "Data",
         cell: ({ row }) => formatDateTime(row.original.executedAt),
       },
       {
         id: "asset",
         accessorFn: (row) => row.asset.name,
-        header: ({ column }) => <SortableHeader column={column} label="Ativo" />,
+        header: "Ativo",
         cell: ({ row }) => row.original.asset.name,
       },
       {
         id: "detail",
         accessorFn: (row) => row.assetUnit?.serialNumber ?? row.assetUnit?.patrimonyNumber ?? "",
-        header: ({ column }) => <SortableHeader column={column} label="Detalhe" />,
+        header: "Detalhe",
         cell: ({ row }) =>
           row.original.assetUnit?.serialNumber ??
           row.original.assetUnit?.patrimonyNumber ??
@@ -91,34 +93,29 @@ export function StockMovementsTable({
       {
         id: "type",
         accessorFn: (row) => row.movementType.name,
-        header: ({ column }) => <SortableHeader column={column} label="Tipo" />,
+        header: "Tipo",
         cell: ({ row }) => <Badge variant="outline">{row.original.movementType.name}</Badge>,
       },
       {
         id: "quantity",
         accessorFn: (row) => row.quantity,
-        header: ({ column }) => <SortableHeader column={column} label="Quantidade" />,
+        header: "Quantidade",
         cell: ({ row }) => row.original.quantity,
       },
       {
         id: "destination",
         accessorFn: (row) => row.destinationLocation?.name ?? "",
-        header: ({ column }) => <SortableHeader column={column} label="Destino" />,
+        header: "Destino",
         cell: ({ row }) => row.original.destinationLocation?.name ?? "—",
       },
     ],
     [],
   );
 
-  const [sorting, setSorting] = useState<SortingState>([{ id: "executedAt", desc: true }]);
-
   const table = useReactTable({
-    data: filtered,
+    data: initialMovements,
     columns,
-    state: { sorting },
-    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
   });
 
   return (
@@ -136,8 +133,8 @@ export function StockMovementsTable({
             [ALL_VALUE]: "Todos os ativos",
             ...Object.fromEntries(assets.map((a) => [a.id, a.name])),
           }}
-          value={assetFilter}
-          onValueChange={(value) => setAssetFilter(value ?? ALL_VALUE)}
+          value={searchParams.get("movAssetId") ?? ALL_VALUE}
+          onValueChange={(value) => applyFilter("movAssetId", value as string)}
         >
           <SelectTrigger size="sm">
             <SelectValue placeholder="Ativo" />
@@ -157,8 +154,8 @@ export function StockMovementsTable({
             [ALL_VALUE]: "Todos os tipos",
             ...Object.fromEntries(movementTypes.map((t) => [t.id, t.name])),
           }}
-          value={typeFilter}
-          onValueChange={(value) => setTypeFilter(value ?? ALL_VALUE)}
+          value={searchParams.get("movTypeId") ?? ALL_VALUE}
+          onValueChange={(value) => applyFilter("movTypeId", value as string)}
         >
           <SelectTrigger size="sm">
             <SelectValue placeholder="Tipo" />
@@ -178,8 +175,8 @@ export function StockMovementsTable({
             [ALL_VALUE]: "Todos os locais",
             ...Object.fromEntries(locations.map((l) => [l.id, l.name])),
           }}
-          value={locationFilter}
-          onValueChange={(value) => setLocationFilter(value ?? ALL_VALUE)}
+          value={searchParams.get("movLocationId") ?? ALL_VALUE}
+          onValueChange={(value) => applyFilter("movLocationId", value as string)}
         >
           <SelectTrigger size="sm">
             <SelectValue placeholder="Local" />
@@ -223,19 +220,28 @@ export function StockMovementsTable({
               ))
             ) : (
               <TableRow>
-                <TableCell
-                  colSpan={columns.length}
-                  className="h-24 text-center text-muted-foreground"
-                >
-                  {initialMovements.length
-                    ? "Nenhuma movimentação encontrada para os filtros aplicados."
-                    : "Nenhuma movimentação registrada ainda."}
+                <TableCell colSpan={columns.length} className="h-24 text-center">
+                  <div className="grid justify-items-center gap-2 text-muted-foreground">
+                    <p>
+                      {hasActiveFilters
+                        ? "Nenhuma movimentação encontrada para os filtros aplicados."
+                        : "Nenhuma movimentação registrada ainda."}
+                    </p>
+                    {canManage && !hasActiveFilters ? (
+                      <Button size="sm" render={<Link href="/stock/new" />}>
+                        <PlusIcon />
+                        Lançar a primeira entrada
+                      </Button>
+                    ) : null}
+                  </div>
                 </TableCell>
               </TableRow>
             )}
           </TableBody>
         </Table>
       </div>
+
+      <PaginationBar page={page} pageSize={pageSize} total={total} paramKey="movPage" />
     </div>
   );
 }

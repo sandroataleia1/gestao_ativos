@@ -78,7 +78,13 @@ export default async function QrTokenPage({
               <Badge>{lookup.status}</Badge>
             </div>
             <CardTitle className="text-lg">{title}</CardTitle>
-            <p className="text-sm text-muted-foreground">{lookup.companyName}</p>
+            <div className="flex items-center gap-2">
+              {lookup.companyLogoDataUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element -- data URL local, não passa pelo otimizador de imagem do Next
+                <img src={lookup.companyLogoDataUrl} alt="" className="size-5 shrink-0 rounded object-contain" />
+              ) : null}
+              <p className="text-sm text-muted-foreground">{lookup.companyName}</p>
+            </div>
           </CardHeader>
           <CardContent className="grid gap-4 text-sm">
             {lookup.type === "ASSET" ? (

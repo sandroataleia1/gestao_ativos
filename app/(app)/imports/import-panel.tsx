@@ -15,6 +15,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { downloadCsv } from "@/lib/csv";
+
+// Só as linhas com erro entram na tabela de detalhe — com milhares de
+// linhas processadas, renderizar uma <TableRow> por registro (a maioria
+// válida, sem nada de acionável) travava o navegador à toa. O botão
+// "Baixar relatório completo" exporta TODAS as linhas (válidas + erro) via
+// CSV, sem depender de renderizar cada uma no DOM primeiro.
+const MAX_ERROR_ROWS_SHOWN = 200;
 
 type ImportRowResult = {
   rowNumber: number;
@@ -108,8 +116,23 @@ export function ImportPanel({
 
   const summary = confirmed?.summary ?? preview?.summary ?? null;
   const rows = confirmed?.rows ?? preview?.rows ?? [];
+  const errorRows = useMemo(() => rows.filter((row) => row.status === "error"), [rows]);
+  const shownErrorRows = errorRows.slice(0, MAX_ERROR_ROWS_SHOWN);
   const hasErrors = (preview?.summary.withError ?? 0) > 0;
   const hasValidRows = (preview?.summary.valid ?? 0) > 0;
+
+  function handleDownloadFullReport() {
+    downloadCsv(
+      `importacao-${type}.csv`,
+      rows.map((row) => ({
+        linha: row.rowNumber,
+        ...row.preview,
+        status: row.status === "error" ? "Erro" : "Válida",
+        acao: row.action ?? "",
+        detalhes: [...row.errors, ...row.notes].join(" — "),
+      })),
+    );
+  }
 
   return (
     <div className="grid gap-4">
@@ -173,59 +196,73 @@ export function ImportPanel({
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
-            <div className="flex flex-wrap gap-2 text-sm">
-              <Badge variant="outline">Total: {summary.total}</Badge>
-              <Badge variant="outline">Válidas: {summary.valid}</Badge>
-              <Badge variant={summary.withError ? "destructive" : "outline"}>Com erro: {summary.withError}</Badge>
-              {confirmed ? (
-                <>
-                  <Badge variant="default">Criadas: {summary.created}</Badge>
-                  <Badge variant="outline">Atualizadas: {summary.updated}</Badge>
-                  <Badge variant="outline">Ignoradas: {summary.skipped}</Badge>
-                </>
-              ) : null}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-2 text-sm">
+                <Badge variant="outline">Total: {summary.total}</Badge>
+                <Badge variant="outline">Válidas: {summary.valid}</Badge>
+                <Badge variant={summary.withError ? "destructive" : "outline"}>Com erro: {summary.withError}</Badge>
+                {confirmed ? (
+                  <>
+                    <Badge variant="default">Criadas: {summary.created}</Badge>
+                    <Badge variant="outline">Atualizadas: {summary.updated}</Badge>
+                    <Badge variant="outline">Ignoradas: {summary.skipped}</Badge>
+                  </>
+                ) : null}
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={handleDownloadFullReport}>
+                <DownloadIcon />
+                Baixar relatório completo (CSV)
+              </Button>
             </div>
 
-            <div className="max-h-112 overflow-auto rounded-lg border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Linha</TableHead>
-                    {previewColumns.map((column) => (
-                      <TableHead key={column}>{column}</TableHead>
-                    ))}
-                    <TableHead>Status</TableHead>
-                    <TableHead>Detalhes</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {rows.map((row) => (
-                    <TableRow key={row.rowNumber}>
-                      <TableCell>{row.rowNumber}</TableCell>
-                      {previewColumns.map((column) => (
-                        <TableCell key={column} className="max-w-40 truncate">
-                          {row.preview[column]}
-                        </TableCell>
+            {errorRows.length ? (
+              <div className="grid gap-2">
+                <p className="text-sm text-muted-foreground">
+                  Mostrando {shownErrorRows.length} de {errorRows.length} linha(s) com erro
+                  {errorRows.length > MAX_ERROR_ROWS_SHOWN
+                    ? " — baixe o relatório completo para ver todas."
+                    : "."}
+                  {" "}Linhas válidas não aparecem aqui (não precisam de atenção); use o CSV para conferir todas.
+                </p>
+                <div className="max-h-112 overflow-auto rounded-lg border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Linha</TableHead>
+                        {previewColumns.map((column) => (
+                          <TableHead key={column}>{column}</TableHead>
+                        ))}
+                        <TableHead>Status</TableHead>
+                        <TableHead>Detalhes</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {shownErrorRows.map((row) => (
+                        <TableRow key={row.rowNumber}>
+                          <TableCell>{row.rowNumber}</TableCell>
+                          {previewColumns.map((column) => (
+                            <TableCell key={column} className="max-w-40 truncate">
+                              {row.preview[column]}
+                            </TableCell>
+                          ))}
+                          <TableCell>
+                            <Badge variant="destructive">Erro</Badge>
+                          </TableCell>
+                          <TableCell className="max-w-64 text-xs text-muted-foreground">
+                            {[...row.errors, ...row.notes].join(" — ")}
+                          </TableCell>
+                        </TableRow>
                       ))}
-                      <TableCell>
-                        {row.action ? (
-                          <Badge variant={row.action === "skipped" ? "outline" : "default"}>
-                            {row.action === "created" ? "Criada" : row.action === "updated" ? "Atualizada" : "Ignorada"}
-                          </Badge>
-                        ) : (
-                          <Badge variant={row.status === "error" ? "destructive" : "outline"}>
-                            {row.status === "error" ? "Erro" : "Válida"}
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="max-w-64 text-xs text-muted-foreground">
-                        {[...row.errors, ...row.notes].join(" — ")}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Nenhuma linha com erro
+                {confirmed ? " — todas as linhas válidas foram gravadas." : "."}
+              </p>
+            )}
 
             {!confirmed ? (
               <div className="flex flex-wrap gap-2">

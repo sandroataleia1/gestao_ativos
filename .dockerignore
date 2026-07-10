@@ -1,0 +1,36 @@
+# Regenerados dentro do build (npm ci / prisma generate / next build) —
+# nunca copiar do host, senão o container herda binários/paths do Windows
+# de quem rodou o build.
+node_modules
+.next
+app/generated/prisma
+
+# Nunca deve entrar na imagem — segredos.
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# Controle de versão e ferramentas locais.
+.git
+.gitignore
+.claude
+
+# Scripts de profiling/debug locais (lib/prisma.ts já lê PRISMA_LOG_QUERIES
+# em runtime; os scripts em si não precisam estar na imagem).
+scripts-tmp-*
+
+# Documentação — não precisa estar dentro da imagem de runtime.
+docs
+*.md
+!README.md
+
+# Infra do próprio deploy (montada via bind mount pelo docker-compose, não
+# copiada pra dentro da imagem da app).
+nginx
+certbot
+backups
+
+coverage
+*.tsbuildinfo
+npm-debug.log*
