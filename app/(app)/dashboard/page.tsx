@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 
 import type { AlertSeverity } from "@/lib/alerts";
-import { getCurrentCompany, hasPermission, requireAuthOrDeny } from "@/lib/auth-server";
+import { getCurrentCompany, hasPermission, requireCompanyOrDeny } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
 import { getDashboardFastSummary, getRecentMovements } from "@/lib/dashboard";
 import { getCachedDashboardAlertsSummary } from "@/lib/cache";
@@ -305,8 +305,8 @@ async function RecentMovementsSection({ companyId }: { companyId: string }) {
 }
 
 export default async function DashboardPage() {
-  const user = await requireAuthOrDeny();
-  const company = await getCurrentCompany();
+  const { user, companyId } = await requireCompanyOrDeny();
+  const company = await getCurrentCompany(companyId);
   const [canViewAlerts, canManageAsset, canManageCustody, canManageStock, canManageEmployee] =
     await Promise.all([
       hasPermission(PERMISSIONS.ALERT_VIEW),
@@ -319,7 +319,7 @@ export default async function DashboardPage() {
   // Só os 2 cards rápidos (aggregate/count) bloqueiam a renderização inicial
   // — alertas e movimentações recentes streamam depois, em paralelo, cada
   // um no seu próprio <Suspense> (ver docs/performance.md).
-  const fastSummary = await getDashboardFastSummary(user.companyId);
+  const fastSummary = await getDashboardFastSummary(companyId);
 
   const quickActions = [
     canManageAsset ? { label: "Novo ativo", href: "/assets/new", icon: PackagePlusIcon } : null,
@@ -387,13 +387,13 @@ export default async function DashboardPage() {
               </>
             }
           >
-            <AlertsDependentSection companyId={user.companyId} />
+            <AlertsDependentSection companyId={companyId} />
           </Suspense>
         ) : null}
       </div>
 
       <Suspense fallback={<CardSkeleton title="Últimas movimentações" />}>
-        <RecentMovementsSection companyId={user.companyId} />
+        <RecentMovementsSection companyId={companyId} />
       </Suspense>
     </div>
   );

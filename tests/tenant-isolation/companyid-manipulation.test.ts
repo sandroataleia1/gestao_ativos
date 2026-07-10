@@ -6,20 +6,24 @@ import {
   cleanupFixtures,
   createTestCompanyWithRoles,
   createTestEmployee,
-  createTestUser,
+  createTestUserWithMembership,
   prisma,
   toSessionUser,
   type TestSessionUser,
 } from "@/tests/helpers/db";
+import { mockCookies } from "@/tests/helpers/mock-request-context";
 
 // --- Mock do limite de sessão -----------------------------------------------
 // Substituímos APENAS a origem da sessão (Better Auth + next/headers). Toda a
 // lógica real de requireCompany/requirePermission (lib/auth-server.ts) roda de
-// verdade contra o banco — é justamente ela que está sob teste.
+// verdade contra o banco — é justamente ela que está sob teste. `cookies()`
+// é mockado (sempre vazio aqui) porque requireCompany() agora também lê o
+// contexto solicitado via lib/company-context-request.ts (Sprint 0.5).
 const h = vi.hoisted(() => ({ current: null as null | { user: TestSessionUser } }));
 
 vi.mock("next/headers", () => ({
   headers: async () => new Headers(),
+  cookies: mockCookies,
 }));
 
 vi.mock("@/lib/auth", () => ({
@@ -47,7 +51,7 @@ beforeAll(async () => {
   companyA = await createTestCompanyWithRoles("A");
   companyB = await createTestCompanyWithRoles("B");
 
-  const rawUserA = await createTestUser(companyA.id, "adminA");
+  const rawUserA = await createTestUserWithMembership(companyA.id, "adminA");
   await assignSystemRole(rawUserA.id, companyA.id, "ADMIN");
   userA = toSessionUser(rawUserA);
 

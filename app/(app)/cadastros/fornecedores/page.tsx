@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { forbidden } from "next/navigation";
 
-import { hasPermission, requireAuthOrDeny } from "@/lib/auth-server";
+import { hasPermission, requireCompanyOrDeny } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
 import { getSuppliersPage } from "@/lib/cadastros";
 import { parsePageParams, parseSearchParam, parseSortParams, type SearchParamsInput } from "@/lib/pagination";
@@ -20,7 +20,7 @@ export default async function FornecedoresPage({
 }: {
   searchParams: Promise<SearchParamsInput>;
 }) {
-  const user = await requireAuthOrDeny();
+  const { companyId } = await requireCompanyOrDeny();
   const canManage = await hasPermission(PERMISSIONS.SUPPLIER_MANAGE);
   if (!canManage) forbidden();
   const resolvedSearchParams = await searchParams;
@@ -29,7 +29,7 @@ export default async function FornecedoresPage({
   const search = parseSearchParam(resolvedSearchParams);
   const { field: sort, dir } = parseSortParams(resolvedSearchParams, SORT_FIELDS, "corporateName");
 
-  const { rows: suppliers, total } = await getSuppliersPage(user.companyId, {
+  const { rows: suppliers, total } = await getSuppliersPage(companyId, {
     page,
     pageSize,
     search: search || undefined,

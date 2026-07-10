@@ -11,9 +11,10 @@ import {
   toSessionUser,
   type TestSessionUser,
 } from "@/tests/helpers/db";
+import { mockCookies } from "@/tests/helpers/mock-request-context";
 
 const h = vi.hoisted(() => ({ current: null as null | { user: TestSessionUser } }));
-vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
+vi.mock("next/headers", () => ({ headers: async () => new Headers(), cookies: mockCookies }));
 vi.mock("@/lib/auth", () => ({ auth: { api: { getSession: async () => h.current } } }));
 function loginAs(user: TestSessionUser | null) {
   h.current = user ? { user } : null;

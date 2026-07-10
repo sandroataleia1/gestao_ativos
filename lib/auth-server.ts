@@ -3,7 +3,11 @@ import { headers } from "next/headers";
 import { forbidden, unauthorized } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@/app/generated/prisma/client";
 import type { PermissionKey, SystemRole } from "@/lib/permissions";
+import { resolveCompanyContext, type CompanyContextSource } from "@/lib/company-context";
+import { getRequestedCompanyId } from "@/lib/company-context-request";
+import { logInfo, logWarn } from "@/lib/logger";
 
 // `next/headers` só pode ser importado em Server Components/Route Handlers,
 // então este módulo é implicitamente server-only.
@@ -42,11 +46,19 @@ export async function getCurrentUser() {
 }
 
 /**
- * Deriva a empresa (tenant) do usuário autenticado a partir da sessão —
- * nunca de um parâmetro vindo do client. Toda query de dados de negócio deve
- * usar o `companyId` retornado aqui (ou por `requireCompany`).
+ * Deriva a empresa (tenant) para exibição — nunca de um parâmetro vindo do
+ * client. Aceita opcionalmente um `companyId` já resolvido (por
+ * `requireCompany()`/`requirePermission()`) — prefira sempre passá-lo
+ * explicitamente a partir da Sprint 0.5, já que o contexto ativo pode
+ * divergir de `User.companyId` (segunda empresa via cookie, membership
+ * legada revogada com fallback para outra). Sem argumento, cai no
+ * comportamento legado (`User.companyId` cru) só por compatibilidade de
+ * chamadores que ainda não foram migrados.
  */
-export async function getCurrentCompany() {
+export async function getCurrentCompany(companyId?: string) {
+  if (companyId) {
+    return prisma.company.findUnique({ where: { id: companyId } });
+  }
   const user = await getCurrentUser();
   if (!user) return null;
   return prisma.company.findUnique({ where: { id: user.companyId } });
@@ -59,40 +71,133 @@ export async function requireAuth() {
 }
 
 /**
- * Garante usuário autenticado e retorna `companyId` já resolvido da sessão,
- * pronto para ser usado em `where: { companyId }` nas queries Prisma.
+ * Garante usuário autenticado e resolve a empresa (tenant) a partir de
+ * `CompanyMembership` — a fonte real de autorização a partir da Sprint 0.5
+ * (ver docs/adr/ADR-001). `User.companyId` é usado só como preferência
+ * legada (`legacyCompanyId`) dentro do resolver central
+ * (`lib/company-context.ts`); nunca concede acesso sozinho. O contexto
+ * solicitado (cookie `active_company_id`) é lido via
+ * `lib/company-context-request.ts` — nunca diretamente aqui nem dentro do
+ * resolver.
+ *
+ * Retorno compatível com o formato anterior (`{ user, companyId }`) — os
+ * dois campos novos (`membershipId`, `contextSource`) são aditivos; nenhuma
+ * rota existente precisa mudar para continuar funcionando.
  */
-export async function requireCompany() {
+export async function requireCompany(): Promise<{
+  user: Awaited<ReturnType<typeof requireAuth>>;
+  companyId: string;
+  membershipId: string;
+  contextSource: CompanyContextSource;
+}> {
   const user = await requireAuth();
-  return { user, companyId: user.companyId };
+  const requestedCompanyId = await getRequestedCompanyId();
+
+  const result = await resolveCompanyContext({
+    userId: user.id,
+    legacyCompanyId: user.companyId,
+    requestedCompanyId,
+  });
+
+  if (result.status === "RESOLVED") {
+    if (result.source === "LEGACY") {
+      logInfo("company_context_resolved_legacy", { userId: user.id, companyId: result.companyId });
+    } else if (result.source === "ONLY_ACTIVE_MEMBERSHIP") {
+      logInfo("company_context_resolved_only_active_membership", {
+        userId: user.id,
+        companyId: result.companyId,
+      });
+    }
+    // Divergência entre a preferência legada e o contexto resolvido — sinal
+    // de que o usuário está operando fora da empresa "de origem" (segunda
+    // membership via cookie, ou a legada foi revogada e caiu no fallback).
+    if (user.companyId && user.companyId !== result.companyId) {
+      logWarn("company_context_diverges_from_legacy", {
+        userId: user.id,
+        legacyCompanyId: user.companyId,
+        resolvedCompanyId: result.companyId,
+        source: result.source,
+      });
+    }
+    return { user, companyId: result.companyId, membershipId: result.membershipId, contextSource: result.source };
+  }
+
+  if (result.status === "INVALID_REQUESTED_CONTEXT") {
+    logWarn("company_context_invalid_requested", { userId: user.id });
+    throw new ForbiddenError("Contexto de empresa inválido.");
+  }
+
+  if (result.status === "SELECTION_REQUIRED") {
+    logInfo("company_context_selection_required", {
+      userId: user.id,
+      activeMembershipCount: result.activeMembershipCount,
+    });
+    throw new ForbiddenError("Mais de uma empresa disponível — selecione qual empresa usar.");
+  }
+
+  if (result.status === "COMPANY_UNAVAILABLE") {
+    logWarn("company_context_company_unavailable", { userId: user.id, reason: result.reason });
+    throw new ForbiddenError("Esta empresa não está disponível no momento.");
+  }
+
+  // NO_ACTIVE_MEMBERSHIP — nunca recria membership aqui; o backfill é
+  // responsabilidade exclusiva do script versionado (scripts/backfill-
+  // company-memberships.ts), nunca do caminho de requisição (ver Sprint 0.5,
+  // Parte I).
+  logWarn("company_context_no_active_membership", { userId: user.id });
+  throw new ForbiddenError("Nenhuma empresa ativa vinculada a este usuário.");
+}
+
+/**
+ * Query compartilhada por `requireRole`/`requirePermission` — garante
+ * simultaneamente (Sprint 0.5, Parte E):
+ *   1. existe uma `CompanyMembership` ACTIVE do usuário para `companyId`;
+ *   2/3. a `UserRole` pertence ao mesmo `userId` e ao mesmo `companyId`
+ *      resolvido;
+ *   4. `Role.companyId` também é igual ao `companyId` resolvido;
+ *   5. o filtro adicional (nome do papel ou permissão) bate.
+ * Sem FK entre `UserRole` e `CompanyMembership` (ADR-001, §3) — o vínculo é
+ * garantido aqui, em código, a cada checagem, nunca pelo banco.
+ */
+async function findAuthorizedUserRole(
+  userId: string,
+  companyId: string,
+  extraRoleWhere: Prisma.RoleWhereInput = {},
+) {
+  const activeMembership = await prisma.companyMembership.findFirst({
+    where: { userId, companyId, status: "ACTIVE" },
+    select: { id: true },
+  });
+  if (!activeMembership) return null;
+
+  return prisma.userRole.findFirst({
+    where: {
+      userId,
+      companyId,
+      role: { companyId, ...extraRoleWhere },
+    },
+    select: { id: true },
+  });
 }
 
 export async function requireRole(role: SystemRole | (string & {})) {
-  const { user, companyId } = await requireCompany();
-  const assignment = await prisma.userRole.findFirst({
-    where: { userId: user.id, companyId, role: { name: role } },
-    select: { id: true },
-  });
+  const ctx = await requireCompany();
+  const assignment = await findAuthorizedUserRole(ctx.user.id, ctx.companyId, { name: role });
   if (!assignment) {
     throw new ForbiddenError(`Papel "${role}" é necessário para esta ação.`);
   }
-  return { user, companyId };
+  return ctx;
 }
 
 export async function requirePermission(permission: PermissionKey | (string & {})) {
-  const { user, companyId } = await requireCompany();
-  const assignment = await prisma.userRole.findFirst({
-    where: {
-      userId: user.id,
-      companyId,
-      role: { permissions: { some: { permission: { key: permission } } } },
-    },
-    select: { id: true },
+  const ctx = await requireCompany();
+  const assignment = await findAuthorizedUserRole(ctx.user.id, ctx.companyId, {
+    permissions: { some: { permission: { key: permission } } },
   });
   if (!assignment) {
     throw new ForbiddenError(`Permissão "${permission}" é necessária para esta ação.`);
   }
-  return { user, companyId };
+  return ctx;
 }
 
 /**
@@ -125,6 +230,23 @@ export async function requireAuthOrDeny() {
     return await requireAuth();
   } catch (error) {
     if (error instanceof AuthError) unauthorized();
+    throw error;
+  }
+}
+
+/**
+ * Variante `requireCompany()` para uso direto em páginas — necessária a
+ * partir da Sprint 0.5 para qualquer página que leia/escreva dado de negócio
+ * por `companyId` mas não exija uma permissão específica (ex.: dashboard,
+ * cadastros de apoio). Substitui o padrão antigo "`requireAuthOrDeny()` +
+ * `user.companyId` cru", que nunca validava `CompanyMembership`.
+ */
+export async function requireCompanyOrDeny() {
+  try {
+    return await requireCompany();
+  } catch (error) {
+    if (error instanceof AuthError) unauthorized();
+    if (error instanceof ForbiddenError) forbidden();
     throw error;
   }
 }

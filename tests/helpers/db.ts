@@ -33,6 +33,10 @@ export async function createTestCompanyWithRoles(label = "co") {
   return company;
 }
 
+/** Cria o `User` sozinho, SEM `CompanyMembership` — use quando o teste
+ * precisa exatamente desse estado (ex.: provar que UserRole sozinho não é
+ * membership). Para um usuário "normal" que precisa passar por
+ * `requireCompany()`/`requirePermission()`, use `createTestUserWithMembership`. */
 export async function createTestUser(companyId: string, label = "user") {
   return prisma.user.create({
     data: {
@@ -42,6 +46,20 @@ export async function createTestUser(companyId: string, label = "user") {
       active: true,
     },
   });
+}
+
+/**
+ * Cria o `User` E uma `CompanyMembership` ACTIVE correspondente — o estado
+ * "normal" de todo usuário real desde a M2B (backfill). Use este helper (não
+ * `createTestUser` sozinho) sempre que o teste for exercitar
+ * `requireCompany()`/`requirePermission()` esperando sucesso (Sprint 0.5:
+ * `CompanyMembership` é a fonte real de autorização — um `User` sem
+ * membership é corretamente bloqueado).
+ */
+export async function createTestUserWithMembership(companyId: string, label = "user") {
+  const user = await createTestUser(companyId, label);
+  await createTestMembership({ userId: user.id, companyId, status: "ACTIVE" });
+  return user;
 }
 
 /** Atribui um papel de sistema (ex.: "ADMIN") a um usuário dentro de uma empresa. */

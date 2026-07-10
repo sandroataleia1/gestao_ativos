@@ -6,15 +6,16 @@ import {
   createProviderUser,
   createTestCompanyWithRoles,
   createTestProvider,
-  createTestUser,
+  createTestUserWithMembership,
   linkProviderToCompany,
   prisma,
   toSessionUser,
   type TestSessionUser,
 } from "@/tests/helpers/db";
+import { mockCookies } from "@/tests/helpers/mock-request-context";
 
 const h = vi.hoisted(() => ({ current: null as null | { user: TestSessionUser } }));
-vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
+vi.mock("next/headers", () => ({ headers: async () => new Headers(), cookies: mockCookies }));
 vi.mock("@/lib/auth", () => ({ auth: { api: { getSession: async () => h.current } } }));
 function loginAs(user: TestSessionUser | null) {
   h.current = user ? { user } : null;
@@ -39,7 +40,7 @@ beforeAll(async () => {
   companyEmpresa = await createTestCompanyWithRoles("empresa");
   companyClient = await createTestCompanyWithRoles("client");
 
-  const raw = await createTestUser(companyEmpresa.id, "dual");
+  const raw = await createTestUserWithMembership(companyEmpresa.id, "dual");
   await assignSystemRole(raw.id, companyEmpresa.id, "ADMIN");
   dualUser = toSessionUser(raw);
 

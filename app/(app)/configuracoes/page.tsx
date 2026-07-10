@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 
 import { prisma } from "@/lib/prisma";
-import { getCurrentCompany, hasPermission, requireAuthOrDeny } from "@/lib/auth-server";
+import { getCurrentCompany, hasPermission, requireCompanyOrDeny } from "@/lib/auth-server";
 import { PERMISSIONS, PERMISSION_DESCRIPTIONS, type PermissionKey } from "@/lib/permissions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,15 +31,15 @@ function formatDateTime(value: Date) {
 // /configuracoes/usuarios; papéis customizados (ROLE_MANAGE) e cadastros de
 // apoio (CATEGORY_MANAGE etc.) continuam sem UI própria.
 export default async function SettingsPage() {
-  const user = await requireAuthOrDeny();
-  const company = await getCurrentCompany();
+  const { user, companyId } = await requireCompanyOrDeny();
+  const company = await getCurrentCompany(companyId);
   const canManageUsers = await hasPermission(PERMISSIONS.USER_MANAGE);
   const canManageCompany = await hasPermission(PERMISSIONS.COMPANY_MANAGE);
   const canViewSstProviders = await hasPermission(PERMISSIONS.SST_PROVIDER_VIEW);
   const canManageSstProviders = await hasPermission(PERMISSIONS.SST_PROVIDER_MANAGE);
 
   const userRoles = await prisma.userRole.findMany({
-    where: { userId: user.id, companyId: user.companyId },
+    where: { userId: user.id, companyId },
     include: {
       role: {
         include: { permissions: { include: { permission: true } } },

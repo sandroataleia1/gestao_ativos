@@ -5,6 +5,12 @@ import { APIError, createAuthMiddleware } from "better-auth/api";
 import { prisma } from "@/lib/prisma";
 import { sendMail } from "@/lib/mail";
 import { logAudit } from "@/lib/audit";
+import { resolveCompanyContext } from "@/lib/company-context";
+// `logger` (pino cru), NUNCA `logInfo`/`logWarn` de lib/logger.ts aqui — esses
+// dois chamam `next/headers()` internamente para propagar request-id, o que
+// os hooks do Better Auth não podem depender (rodam fora de um request scope
+// de Server Component/Route Handler — ver Sprint 0.5, Parte F).
+import { logger } from "@/lib/logger";
 
 // Header interno que só o próprio servidor pode enviar (nunca alcançável a
 // partir de um POST externo direto a /api/auth/sign-up/email) — ver
@@ -190,18 +196,36 @@ export const auth = betterAuth({
       // internamente (`getSessionFromCtx`) não é exportada pelo Better
       // Auth, então acoplar a ela seria depender de um caminho interno
       // instável da lib.
+      //
+      // Sprint 0.5: qual `companyId` usar na linha de auditoria agora vem do
+      // resolver central (lib/company-context.ts), NUNCA duplicado aqui —
+      // chamado só com entradas explícitas (userId + a preferência legada
+      // User.companyId), sem `requestedCompanyId` (o hook não tem acesso ao
+      // cookie de contexto — não pode usar `next/headers`/adapters de Route
+      // Handler). Nos bastidores isso já aplica exatamente a regra pedida:
+      // usa a legada se tiver membership ativa, cai para a membership única
+      // se houver exatamente uma, e não escolhe nada se for ambíguo.
       if (ctx.path === "/sign-out") {
         const session = await auth.api.getSession({ headers: ctx.headers ?? new Headers() }).catch(() => null);
         if (session?.user) {
           const user = session.user as typeof session.user & { companyId: string };
-          await logAudit(prisma, {
-            companyId: user.companyId,
-            actorUserId: user.id,
-            actorName: user.name,
-            action: "auth.logout",
-            targetType: "User",
-            targetId: user.id,
-          });
+          const result = await resolveCompanyContext({ userId: user.id, legacyCompanyId: user.companyId });
+          if (result.status === "RESOLVED") {
+            await logAudit(prisma, {
+              companyId: result.companyId,
+              actorUserId: user.id,
+              actorName: user.name,
+              action: "auth.logout",
+              targetType: "User",
+              targetId: user.id,
+            });
+          } else {
+            // Sem companyId resolvível (nenhuma membership ativa, ou
+            // ambíguo) — AuditLog.companyId é obrigatório, então não há como
+            // gravar a linha; registra só a ocorrência em log estruturado
+            // (sem e-mail/CPF/CNPJ/cookie/token).
+            logger.warn({ userId: user.id, resolveStatus: result.status }, "auth_hook_logout_no_resolvable_company");
+          }
         }
       }
     }),
@@ -216,16 +240,21 @@ export const auth = betterAuth({
       if (!returned) return;
       const body = returned instanceof Response ? (returned.status === 200 ? await returned.clone().json() : null) : returned;
       const user = (body as { user?: { id: string; name: string; email: string; companyId?: string } } | null)?.user;
-      if (!user?.companyId) return;
+      if (!user?.id) return;
 
-      await logAudit(prisma, {
-        companyId: user.companyId,
-        actorUserId: user.id,
-        actorName: user.name,
-        action: "auth.login",
-        targetType: "User",
-        targetId: user.id,
-      });
+      const result = await resolveCompanyContext({ userId: user.id, legacyCompanyId: user.companyId ?? null });
+      if (result.status === "RESOLVED") {
+        await logAudit(prisma, {
+          companyId: result.companyId,
+          actorUserId: user.id,
+          actorName: user.name,
+          action: "auth.login",
+          targetType: "User",
+          targetId: user.id,
+        });
+      } else {
+        logger.warn({ userId: user.id, resolveStatus: result.status }, "auth_hook_login_no_resolvable_company");
+      }
     }),
   },
   // nextCookies() precisa ser sempre o último plugin da lista.

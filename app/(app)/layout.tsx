@@ -1,23 +1,24 @@
-import { redirect } from "next/navigation";
-
 import { prisma } from "@/lib/prisma";
-import { getCurrentCompany, getCurrentUser } from "@/lib/auth-server";
+import { getCurrentCompany, requireCompanyOrDeny } from "@/lib/auth-server";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 
+// Layout raiz de todo o Portal Empresa (app/(app)/**) — usa
+// `requireCompanyOrDeny()` (não só autenticação) para que a validação de
+// `CompanyMembership` ACTIVE aconteça em profundidade de defesa para
+// qualquer página da árvore, mesmo que uma página individual esqueça de
+// checar. Redireciona para /login (401) ou renderiza app/forbidden.tsx (403)
+// automaticamente — ver lib/auth-server.ts.
 export default async function AppLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const user = await getCurrentUser();
-  if (!user) {
-    redirect("/login");
-  }
+  const { user, companyId } = await requireCompanyOrDeny();
 
   const [company, activeEmployeeCount] = await Promise.all([
-    getCurrentCompany(),
-    prisma.employee.count({ where: { companyId: user.companyId, status: "ACTIVE" } }),
+    getCurrentCompany(companyId),
+    prisma.employee.count({ where: { companyId, status: "ACTIVE" } }),
   ]);
 
   return (

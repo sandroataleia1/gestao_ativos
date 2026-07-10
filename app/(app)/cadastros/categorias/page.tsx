@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { forbidden } from "next/navigation";
 
-import { hasPermission, requireAuthOrDeny } from "@/lib/auth-server";
+import { hasPermission, requireCompanyOrDeny } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
 import { getCategoriesPage } from "@/lib/cadastros";
 import { parsePageParams, parseSearchParam, parseSortParams, type SearchParamsInput } from "@/lib/pagination";
@@ -20,7 +20,7 @@ export default async function CategoriasPage({
 }: {
   searchParams: Promise<SearchParamsInput>;
 }) {
-  const user = await requireAuthOrDeny();
+  const { companyId } = await requireCompanyOrDeny();
   const canManage = await hasPermission(PERMISSIONS.CATEGORY_MANAGE);
   if (!canManage) forbidden();
   const resolvedSearchParams = await searchParams;
@@ -29,7 +29,7 @@ export default async function CategoriasPage({
   const search = parseSearchParam(resolvedSearchParams);
   const { field: sort, dir } = parseSortParams(resolvedSearchParams, SORT_FIELDS, "name");
 
-  const { rows: categories, total } = await getCategoriesPage(user.companyId, {
+  const { rows: categories, total } = await getCategoriesPage(companyId, {
     page,
     pageSize,
     search: search || undefined,
