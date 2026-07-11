@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ChevronRightIcon } from "lucide-react";
 
 import { prisma } from "@/lib/prisma";
 import { requireSstProviderCompanyAccessOrDeny, sstCanOperate } from "@/lib/sst-auth";
@@ -56,6 +58,13 @@ export default async function SstClassDetailPage({ params }: RouteParams) {
   return (
     <div className="grid gap-6">
       <div>
+        <div className="flex items-center gap-1 text-sm text-muted-foreground">
+          <Link href={`/sst/companies/${companyId}/classes`} className="hover:text-foreground">
+            Turmas
+          </Link>
+          <ChevronRightIcon className="size-3.5" />
+          <span className="text-foreground">{trainingClass.title}</span>
+        </div>
         <h1 className="text-2xl font-semibold">{trainingClass.title}</h1>
         <p className="text-sm text-muted-foreground">{trainingClass.companyTraining.title}</p>
       </div>

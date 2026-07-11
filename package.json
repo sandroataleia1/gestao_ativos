@@ -11,6 +11,8 @@
     "db:seed": "prisma db seed",
     "db:seed:bulk": "tsx prisma/seed-bulk.ts",
     "db:reset-demo": "tsx prisma/reset-demo.ts && prisma db seed",
+    "db:seed-sst-demo": "tsx prisma/seed-sst-demo.ts",
+    "db:reset-sst-demo": "tsx prisma/reset-sst-demo.ts && tsx prisma/seed-sst-demo.ts",
     "diagnose:documents": "tsx scripts/diagnose-company-documents.ts",
     "diagnose:pre-m2": "tsx scripts/diagnose-pre-m2.ts",
     "backfill:company-memberships": "tsx scripts/backfill-company-memberships.ts",
@@ -45,6 +47,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/nodemailer": "^8.0.1",

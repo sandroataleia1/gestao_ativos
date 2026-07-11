@@ -7,8 +7,16 @@ export const TRAINING_CLASS_STATUS_VALUES = [
   "CANCELLED",
 ] as const;
 
+// `null` tratado como "vazio" igual à string vazia — necessário porque o
+// fluxo de cancelamento (SST e Portal Empresa) reenvia os campos opcionais
+// tal como vêm do Prisma (TrainingClass.location/instructor/notes são
+// `string | null`, nunca `undefined`); sem isso, `z.string().optional()`
+// rejeita `null` com "Invalid input: expected string, received null" e o
+// cancelamento falha silenciosamente (bug real encontrado na validação
+// manual da Sprint Demo Comercial SST 1.0 — a mesma rota é usada pela
+// tabela de turmas do Portal Empresa, então também corrigido lá).
 const emptyToUndefined = (value: unknown) =>
-  typeof value === "string" && value.trim() === "" ? undefined : value;
+  value === null || (typeof value === "string" && value.trim() === "") ? undefined : value;
 
 const optionalText = (max: number) =>
   z.preprocess(emptyToUndefined, z.string().trim().max(max).optional());

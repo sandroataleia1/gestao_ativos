@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { DebouncedSearchInput } from "@/components/ui/debounced-search-input";
 import { PaginationBar } from "@/components/ui/pagination-bar";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -68,10 +69,25 @@ export function SstEmployeesTable({
   const searchParams = useSearchParams();
   const hasActiveFilters = Boolean(searchParams.get("q"));
   const [selectedEmployee, setSelectedEmployee] = useState<EmployeeRow | null>(null);
+  // Filtro "somente pendentes" é local à página atual (não refaz a consulta
+  // paginada no servidor) — aceitável nesta sprint porque o volume por
+  // empresa de demonstração é pequeno; para empresas com muitas páginas de
+  // colaboradores isso só filtra dentro da página carregada (limitação
+  // documentada, ver docs/demo-portal-consultoria-sst.md).
+  const [onlyPending, setOnlyPending] = useState(false);
+  const visibleEmployees = useMemo(
+    () => (onlyPending ? employees.filter((employee) => employee.status === "PENDENTE") : employees),
+    [employees, onlyPending],
+  );
 
   return (
     <div className="grid gap-4">
-      <DebouncedSearchInput placeholder="Buscar por nome, documento ou matrícula..." className="w-72" />
+      <div className="flex flex-wrap items-center gap-2">
+        <DebouncedSearchInput placeholder="Buscar por nome, documento ou matrícula..." className="w-72" />
+        <Button variant={onlyPending ? "default" : "outline"} size="sm" onClick={() => setOnlyPending((prev) => !prev)}>
+          Somente sem treinamento obrigatório
+        </Button>
+      </div>
 
       <div className="rounded-xl border bg-card">
         <Table>
@@ -89,8 +105,8 @@ export function SstEmployeesTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {employees.length ? (
-              employees.map((employee) => (
+            {visibleEmployees.length ? (
+              visibleEmployees.map((employee) => (
                 <TableRow
                   key={employee.id}
                   className="cursor-pointer hover:bg-muted/40"
@@ -112,9 +128,11 @@ export function SstEmployeesTable({
             ) : (
               <TableRow>
                 <TableCell colSpan={9} className="h-32 text-center text-muted-foreground">
-                  {hasActiveFilters
-                    ? "Nenhum colaborador encontrado para os filtros aplicados."
-                    : "Nenhum colaborador ativo cadastrado nesta empresa."}
+                  {onlyPending
+                    ? "Nenhum colaborador pendente nesta página. Ótimo sinal de conformidade."
+                    : hasActiveFilters
+                      ? "Nenhum colaborador encontrado para os filtros aplicados."
+                      : "Nenhum colaborador ativo cadastrado nesta empresa."}
                 </TableCell>
               </TableRow>
             )}

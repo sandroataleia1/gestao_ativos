@@ -1,3 +1,4 @@
+import type { SstProviderCompanyAccessLevel, SstProviderCompanyStatus } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 
 // Métricas de conformidade de treinamento para o Portal Consultoria SST —
@@ -135,6 +136,7 @@ export type CompanyTrainingMetrics = {
   activeEmployeeCount: number;
   activeTrainingCount: number;
   scheduledClassCount: number;
+  inProgressClassCount: number;
   classesTodayCount: number;
   classesThisWeekCount: number;
   expiredCount: number;
@@ -156,6 +158,7 @@ export async function getCompanyTrainingMetrics(
     activeEmployeeCount,
     activeTrainingCount,
     scheduledClassCount,
+    inProgressClassCount,
     classesTodayCount,
     classesThisWeekCount,
     { expiredCount, expiringSoonCount },
@@ -165,6 +168,7 @@ export async function getCompanyTrainingMetrics(
     prisma.employee.count({ where: { companyId, status: "ACTIVE" } }),
     prisma.companyTraining.count({ where: { companyId, active: true } }),
     prisma.trainingClass.count({ where: { companyId, status: "SCHEDULED" } }),
+    prisma.trainingClass.count({ where: { companyId, status: "IN_PROGRESS" } }),
     prisma.trainingClass.count({
       where: { companyId, status: { not: "CANCELLED" }, startsAt: { gte: startOfDay, lt: endOfDay } },
     }),
@@ -183,6 +187,7 @@ export async function getCompanyTrainingMetrics(
     activeEmployeeCount,
     activeTrainingCount,
     scheduledClassCount,
+    inProgressClassCount,
     classesTodayCount,
     classesThisWeekCount,
     expiredCount,
@@ -193,16 +198,34 @@ export async function getCompanyTrainingMetrics(
   };
 }
 
+export type SstLinkedCompanySummary = CompanyTrainingMetrics & {
+  /** Nível de acesso do vínculo (SstProviderCompany.accessLevel) — exibido
+   * na listagem de empresas (Sprint Demo Comercial SST 1.0, Parte 6). */
+  accessLevel: SstProviderCompanyAccessLevel;
+  /** Situação do relacionamento (SstProviderCompany.status) — sempre ACTIVE
+   * aqui porque `getLinkedCompaniesWithMetrics` já filtra por isso, mas o
+   * campo é exposto explicitamente porque a UI precisa mostrá-lo. */
+  relationshipStatus: SstProviderCompanyStatus;
+};
+
 /** Empresas com vínculo ACTIVE para o provider informado — nunca lista uma
  * empresa sem vínculo ACTIVE. `providerId` deve vir sempre da sessão
  * (lib/sst-auth.ts), nunca do client. */
-export async function getLinkedCompaniesWithMetrics(providerId: string, now = new Date()) {
+export async function getLinkedCompaniesWithMetrics(
+  providerId: string,
+  now = new Date(),
+): Promise<SstLinkedCompanySummary[]> {
   const links = await prisma.sstProviderCompany.findMany({
     where: { providerId, status: "ACTIVE" },
-    select: { companyId: true },
+    select: { companyId: true, accessLevel: true, status: true },
     orderBy: { createdAt: "asc" },
   });
-  return Promise.all(links.map((link) => getCompanyTrainingMetrics(link.companyId, now)));
+  const metrics = await Promise.all(links.map((link) => getCompanyTrainingMetrics(link.companyId, now)));
+  return metrics.map((metric, index) => ({
+    ...metric,
+    accessLevel: links[index].accessLevel,
+    relationshipStatus: links[index].status,
+  }));
 }
 
 export type SstProviderDashboardSummary = {
@@ -211,6 +234,9 @@ export type SstProviderDashboardSummary = {
   activeTrainingCount: number;
   expiredCount: number;
   expiringSoonCount: number;
+  missingMandatoryCount: number;
+  scheduledClassCount: number;
+  inProgressClassCount: number;
   classesTodayCount: number;
   classesThisWeekCount: number;
   averageComplianceScore: number;
@@ -243,6 +269,9 @@ export async function getProviderDashboardSummary(
       activeTrainingCount: 0,
       expiredCount: 0,
       expiringSoonCount: 0,
+      missingMandatoryCount: 0,
+      scheduledClassCount: 0,
+      inProgressClassCount: 0,
       classesTodayCount: 0,
       classesThisWeekCount: 0,
       averageComplianceScore: 0,
@@ -259,6 +288,9 @@ export async function getProviderDashboardSummary(
     activeTrainingCount: sum((c) => c.activeTrainingCount),
     expiredCount: sum((c) => c.expiredCount),
     expiringSoonCount: sum((c) => c.expiringSoonCount),
+    missingMandatoryCount: sum((c) => c.missingMandatoryCount),
+    scheduledClassCount: sum((c) => c.scheduledClassCount),
+    inProgressClassCount: sum((c) => c.inProgressClassCount),
     classesTodayCount: sum((c) => c.classesTodayCount),
     classesThisWeekCount: sum((c) => c.classesThisWeekCount),
     averageComplianceScore: Math.round(sum((c) => c.complianceScore) / companies.length),

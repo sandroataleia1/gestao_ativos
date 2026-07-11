@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { AlertTriangleIcon, CalendarDaysIcon, CheckCircle2Icon, UsersIcon } from "lucide-react";
 
-import { requireSstProviderCompanyAccessOrDeny } from "@/lib/sst-auth";
+import { requireSstProviderCompanyAccessOrDeny, sstCanAdminister, sstCanOperate } from "@/lib/sst-auth";
 import {
   getCompanyTrainingMetrics,
   getCriticalTrainingsForCompany,
@@ -45,7 +45,10 @@ type RouteParams = { params: Promise<{ companyId: string }> };
 
 export default async function SstCompanySummaryPage({ params }: RouteParams) {
   const { companyId } = await params;
-  const { link } = await requireSstProviderCompanyAccessOrDeny(companyId);
+  const ctx = await requireSstProviderCompanyAccessOrDeny(companyId);
+  const { link } = ctx;
+  const canAdminister = sstCanAdminister(ctx);
+  const canOperate = sstCanOperate(ctx);
 
   const [metrics, upcomingClasses, criticalTrainings, employeesWithPendingTraining] = await Promise.all([
     getCompanyTrainingMetrics(companyId),
@@ -67,14 +70,20 @@ export default async function SstCompanySummaryPage({ params }: RouteParams) {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {canAdminister ? (
+            <Button render={<Link href={`/sst/companies/${companyId}/trainings/new`} />}>Novo treinamento</Button>
+          ) : null}
+          {canOperate ? (
+            <Button render={<Link href={`/sst/companies/${companyId}/classes/new`} />}>Nova turma</Button>
+          ) : null}
+          <Button variant="outline" render={<Link href={`/sst/companies/${companyId}/employees`} />}>
+            Colaboradores sem treinamento
+          </Button>
           <Button variant="outline" render={<Link href={`/sst/companies/${companyId}/trainings`} />}>
             Ver treinamentos
           </Button>
           <Button variant="outline" render={<Link href={`/sst/companies/${companyId}/classes`} />}>
             Ver turmas
-          </Button>
-          <Button variant="outline" render={<Link href={`/sst/companies/${companyId}/employees`} />}>
-            Ver colaboradores
           </Button>
         </div>
       </div>

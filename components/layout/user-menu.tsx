@@ -23,14 +23,25 @@ function initialsFor(name: string) {
   return initials.join("") || "?";
 }
 
-export function UserMenu({ name, email }: { name: string; email: string }) {
+export function UserMenu({
+  name,
+  email,
+  signOutRedirectTo = "/login",
+}: {
+  name: string;
+  email: string;
+  // Portal Consultoria (app/sst/**) precisa voltar para /sst/login, nunca
+  // para /login (Portal Empresa) — ver Sprint Demo Comercial SST 1.0,
+  // Parte 4 ("links que retornam ao Portal Empresa indevidamente").
+  signOutRedirectTo?: string;
+}) {
   const router = useRouter();
   const [isSigningOut, setIsSigningOut] = useState(false);
 
   async function handleSignOut() {
     setIsSigningOut(true);
     await signOut();
-    router.push("/login");
+    router.push(signOutRedirectTo);
     router.refresh();
   }
 

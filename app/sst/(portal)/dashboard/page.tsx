@@ -4,11 +4,13 @@ import {
   AlertTriangleIcon,
   BuildingIcon,
   CalendarCheckIcon,
+  CalendarClockIcon,
   CalendarDaysIcon,
   CheckCircle2Icon,
   ClockIcon,
   GaugeIcon,
   GraduationCapIcon,
+  UserXIcon,
   UsersIcon,
 } from "lucide-react";
 
@@ -22,17 +24,25 @@ export const metadata: Metadata = {
   title: "Dashboard — Portal Consultoria SST",
 };
 
+// Cada card explica o que representa (Sprint Demo Comercial SST 1.0, Parte
+// 5) — description curta abaixo do número, não só o rótulo. href é
+// opcional: só os cards com uma página real para onde apontar (nesta
+// sprint, sempre a listagem de empresas) viram link.
 function SummaryCard({
   label,
+  description,
   value,
   icon: Icon,
+  href,
 }: {
   label: string;
+  description: string;
   value: number | string;
   icon: typeof BuildingIcon;
+  href?: string;
 }) {
-  return (
-    <Card>
+  const content = (
+    <Card className={href ? "h-full transition-colors hover:border-primary/40" : undefined}>
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
         <span className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -41,8 +51,17 @@ function SummaryCard({
       </CardHeader>
       <CardContent>
         <p className="text-2xl font-semibold">{value}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{description}</p>
       </CardContent>
     </Card>
+  );
+
+  if (!href) return content;
+
+  return (
+    <Link href={href} className="block">
+      {content}
+    </Link>
   );
 }
 
@@ -72,14 +91,75 @@ export default async function SstDashboardPage() {
       ) : (
         <>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <SummaryCard label="Empresas atendidas" value={summary.companyCount} icon={BuildingIcon} />
-            <SummaryCard label="Colaboradores ativos" value={summary.activeEmployeeCount} icon={UsersIcon} />
-            <SummaryCard label="Treinamentos ativos" value={summary.activeTrainingCount} icon={GraduationCapIcon} />
-            <SummaryCard label="Índice de conformidade SST" value={`${summary.averageComplianceScore}%`} icon={GaugeIcon} />
-            <SummaryCard label="Treinamentos vencidos" value={summary.expiredCount} icon={AlertTriangleIcon} />
-            <SummaryCard label="Vencendo em 30 dias" value={summary.expiringSoonCount} icon={ClockIcon} />
-            <SummaryCard label="Turmas hoje" value={summary.classesTodayCount} icon={CalendarCheckIcon} />
-            <SummaryCard label="Turmas esta semana" value={summary.classesThisWeekCount} icon={CalendarDaysIcon} />
+            <SummaryCard
+              label="Empresas atendidas"
+              description="Empresas com vínculo ativo com a sua consultoria."
+              value={summary.companyCount}
+              icon={BuildingIcon}
+              href="/sst/companies"
+            />
+            <SummaryCard
+              label="Colaboradores ativos"
+              description="Total de colaboradores ativos nas empresas atendidas."
+              value={summary.activeEmployeeCount}
+              icon={UsersIcon}
+              href="/sst/companies"
+            />
+            <SummaryCard
+              label="Sem treinamento obrigatório"
+              description="Colaboradores ativos sem nenhum treinamento obrigatório concluído."
+              value={summary.missingMandatoryCount}
+              icon={UserXIcon}
+              href="/sst/companies"
+            />
+            <SummaryCard
+              label="Índice de conformidade SST"
+              description="Média do índice de conformidade das empresas atendidas."
+              value={`${summary.averageComplianceScore}%`}
+              icon={GaugeIcon}
+            />
+            <SummaryCard
+              label="Treinamentos vencidos"
+              description="Treinamentos de colaboradores já fora da validade."
+              value={summary.expiredCount}
+              icon={AlertTriangleIcon}
+              href="/sst/companies"
+            />
+            <SummaryCard
+              label="Vencendo em 30 dias"
+              description="Treinamentos que perderão a validade nos próximos 30 dias."
+              value={summary.expiringSoonCount}
+              icon={ClockIcon}
+              href="/sst/companies"
+            />
+            <SummaryCard
+              label="Turmas agendadas"
+              description="Turmas futuras já programadas, ainda não iniciadas."
+              value={summary.scheduledClassCount}
+              icon={CalendarClockIcon}
+              href="/sst/companies"
+            />
+            <SummaryCard
+              label="Turmas em andamento"
+              description="Turmas em curso neste momento."
+              value={summary.inProgressClassCount}
+              icon={GraduationCapIcon}
+              href="/sst/companies"
+            />
+            <SummaryCard
+              label="Turmas hoje"
+              description="Turmas com início previsto para hoje."
+              value={summary.classesTodayCount}
+              icon={CalendarCheckIcon}
+              href="/sst/companies"
+            />
+            <SummaryCard
+              label="Turmas esta semana"
+              description="Turmas com início previsto até o fim desta semana."
+              value={summary.classesThisWeekCount}
+              icon={CalendarDaysIcon}
+              href="/sst/companies"
+            />
           </div>
 
           <Card>
