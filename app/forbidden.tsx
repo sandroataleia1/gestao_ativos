@@ -15,7 +15,18 @@ export default function Forbidden() {
           Você está autenticado, mas não tem permissão para acessar esta página.
         </p>
       </div>
-      <Button render={<Link href="/dashboard" />}>Voltar ao dashboard</Button>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <Button render={<Link href="/dashboard" />}>Voltar ao dashboard</Button>
+        {/* Sprint 0.6, Parte D: link explícito de recuperação — cobre o
+            caso de um cookie de contexto (`active_company_id`) apontando
+            para uma empresa/membership que não é mais válida (revogada,
+            de outro usuário, ou de uma empresa agora indisponível). A
+            página /select-company nunca depende desse cookie para
+            carregar. */}
+        <Button variant="outline" render={<Link href="/select-company" />}>
+          Trocar de empresa
+        </Button>
+      </div>
     </div>
   );
 }

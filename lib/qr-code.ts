@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 
 import { prisma } from "@/lib/prisma";
 import { NotFoundError } from "@/lib/api-errors";
-import { getCurrentUser, hasPermission } from "@/lib/auth-server";
+import { getCurrentUser, getResolvedCompanyId, hasPermission } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
 import { toNumber } from "@/lib/stock";
 
@@ -260,7 +260,14 @@ const MANAGE_PERMISSION_BY_TYPE: Record<QrResourceType, string> = {
  */
 export async function computeQrPermissions(lookup: QrLookup): Promise<QrPermissions> {
   const user = await getCurrentUser();
-  if (!user || user.companyId !== lookup.companyId) {
+  // Sprint 0.6, Parte A.2: `sameCompany` usa o companyId resolvido pelo
+  // contexto empresarial (CompanyMembership + cookie/legado), nunca
+  // `User.companyId` bruto — mesma fonte de verdade que `hasPermission()`
+  // já usa por baixo dos panos. Isso só torna `sameCompany` consistente com
+  // o que os dois `hasPermission()` abaixo já decidem de verdade; não amplia
+  // acesso (canView/canManage sempre revalidam via requirePermission()).
+  const resolvedCompanyId = await getResolvedCompanyId();
+  if (!user || !resolvedCompanyId || resolvedCompanyId !== lookup.companyId) {
     return { authenticated: Boolean(user), sameCompany: false, canView: false, canManage: false };
   }
 

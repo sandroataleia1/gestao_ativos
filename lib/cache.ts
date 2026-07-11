@@ -20,7 +20,11 @@ import { getStockSummary } from "@/lib/stock";
 
 const REVALIDATE_SECONDS = 60;
 
-function companyTag(companyId: string, scope: "dashboard" | "stock" | "reports-lookups") {
+// Exportada (Sprint 0.6, Parte I, teste 14) para permitir provar, sem
+// depender do runtime de cache do Next em teste, que o isolamento por tenant
+// é estrutural: a MESMA `scope` para empresas diferentes SEMPRE produz tags
+// diferentes — nenhum dado de um tenant pode ser servido do cache de outro.
+export function companyTag(companyId: string, scope: "dashboard" | "stock" | "reports-lookups") {
   return `company:${companyId}:${scope}`;
 }
 

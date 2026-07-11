@@ -5,7 +5,7 @@ import { APIError, createAuthMiddleware } from "better-auth/api";
 import { prisma } from "@/lib/prisma";
 import { sendMail } from "@/lib/mail";
 import { logAudit } from "@/lib/audit";
-import { resolveCompanyContext } from "@/lib/company-context";
+import { resolveUnambiguousCompany } from "@/lib/company-context";
 // `logger` (pino cru), NUNCA `logInfo`/`logWarn` de lib/logger.ts aqui — esses
 // dois chamam `next/headers()` internamente para propagar request-id, o que
 // os hooks do Better Auth não podem depender (rodam fora de um request scope
@@ -197,19 +197,18 @@ export const auth = betterAuth({
       // Auth, então acoplar a ela seria depender de um caminho interno
       // instável da lib.
       //
-      // Sprint 0.5: qual `companyId` usar na linha de auditoria agora vem do
-      // resolver central (lib/company-context.ts), NUNCA duplicado aqui —
-      // chamado só com entradas explícitas (userId + a preferência legada
-      // User.companyId), sem `requestedCompanyId` (o hook não tem acesso ao
-      // cookie de contexto — não pode usar `next/headers`/adapters de Route
-      // Handler). Nos bastidores isso já aplica exatamente a regra pedida:
-      // usa a legada se tiver membership ativa, cai para a membership única
-      // se houver exatamente uma, e não escolhe nada se for ambíguo.
+      // Sprint 0.6, Parte A.1: qual `companyId` usar na linha de auditoria
+      // vem de `resolveUnambiguousCompany()` (lib/company-context.ts), NUNCA
+      // duplicado aqui. Diferente de `resolveCompanyContext()` (usado para
+      // servir página/API), esta variante NUNCA prioriza `User.companyId` —
+      // só grava `AuditLog` empresarial quando o usuário tem exatamente UMA
+      // membership ACTIVE com empresa disponível; com zero ou várias, só
+      // log estruturado, nunca atribuição arbitrária à empresa legada.
       if (ctx.path === "/sign-out") {
         const session = await auth.api.getSession({ headers: ctx.headers ?? new Headers() }).catch(() => null);
         if (session?.user) {
           const user = session.user as typeof session.user & { companyId: string };
-          const result = await resolveCompanyContext({ userId: user.id, legacyCompanyId: user.companyId });
+          const result = await resolveUnambiguousCompany(user.id);
           if (result.status === "RESOLVED") {
             await logAudit(prisma, {
               companyId: result.companyId,
@@ -220,11 +219,10 @@ export const auth = betterAuth({
               targetId: user.id,
             });
           } else {
-            // Sem companyId resolvível (nenhuma membership ativa, ou
-            // ambíguo) — AuditLog.companyId é obrigatório, então não há como
-            // gravar a linha; registra só a ocorrência em log estruturado
-            // (sem e-mail/CPF/CNPJ/cookie/token).
-            logger.warn({ userId: user.id, resolveStatus: result.status }, "auth_hook_logout_no_resolvable_company");
+            // NONE ou AMBIGUOUS — AuditLog.companyId é obrigatório e nunca
+            // deve ser uma escolha arbitrária; registra só a ocorrência em
+            // log estruturado (sem e-mail/CPF/CNPJ/cookie/token).
+            logger.warn({ userId: user.id, resolveStatus: result.status }, "auth_hook_logout_no_unambiguous_company");
           }
         }
       }
@@ -242,7 +240,7 @@ export const auth = betterAuth({
       const user = (body as { user?: { id: string; name: string; email: string; companyId?: string } } | null)?.user;
       if (!user?.id) return;
 
-      const result = await resolveCompanyContext({ userId: user.id, legacyCompanyId: user.companyId ?? null });
+      const result = await resolveUnambiguousCompany(user.id);
       if (result.status === "RESOLVED") {
         await logAudit(prisma, {
           companyId: result.companyId,
@@ -253,7 +251,7 @@ export const auth = betterAuth({
           targetId: user.id,
         });
       } else {
-        logger.warn({ userId: user.id, resolveStatus: result.status }, "auth_hook_login_no_resolvable_company");
+        logger.warn({ userId: user.id, resolveStatus: result.status }, "auth_hook_login_no_unambiguous_company");
       }
     }),
   },

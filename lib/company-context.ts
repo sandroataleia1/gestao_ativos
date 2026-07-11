@@ -216,3 +216,56 @@ export async function resolveCompanyContext(
 
   return { status: "SELECTION_REQUIRED", activeMembershipCount };
 }
+
+// ============================================================================
+// Resolução SEM seleção humana — Sprint 0.6, Parte A.1.
+//
+// `resolveCompanyContext()` (acima) prioriza deliberadamente `legacyCompanyId`
+// quando ela tem uma membership ACTIVE válida — correto para servir
+// requisições de página/API (é o comportamento "cai na sua empresa de
+// sempre" esperado por um usuário humano). Mas em contextos SEM nenhuma
+// seleção humana envolvida (ex.: os hooks de login/logout do Better Auth,
+// que só precisam de um `companyId` para etiquetar uma linha de `AuditLog`),
+// usar esse mesmo atalho seria escolher arbitrariamente uma entre várias
+// empresas igualmente válidas só porque `User.companyId` aponta pra ela.
+//
+// `resolveUnambiguousCompany()` nunca dá prioridade à legada: só resolve
+// quando existe exatamente UMA membership ACTIVE com empresa disponível,
+// seja ela qual for (pode até ser a legada, mas só por ser a única opção,
+// nunca por prioridade).
+// ============================================================================
+
+export type ResolveUnambiguousCompanyResult =
+  | { status: "RESOLVED"; companyId: string; membershipId: string }
+  | { status: "NONE" }
+  | { status: "AMBIGUOUS"; activeMembershipCount: number };
+
+export async function resolveUnambiguousCompany(userId: string): Promise<ResolveUnambiguousCompanyResult> {
+  const candidates = await prisma.companyMembership.findMany({
+    where: {
+      userId,
+      status: "ACTIVE",
+      company: { active: true, operationalStatus: "ACTIVE" },
+    },
+    select: { id: true, companyId: true },
+    take: COMPANY_MEMBERSHIP_SELECTION_LIMIT,
+  });
+
+  if (candidates.length === 0) {
+    return { status: "NONE" };
+  }
+
+  if (candidates.length === 1) {
+    return { status: "RESOLVED", companyId: candidates[0].companyId, membershipId: candidates[0].id };
+  }
+
+  const activeMembershipCount = await prisma.companyMembership.count({
+    where: {
+      userId,
+      status: "ACTIVE",
+      company: { active: true, operationalStatus: "ACTIVE" },
+    },
+  });
+
+  return { status: "AMBIGUOUS", activeMembershipCount };
+}

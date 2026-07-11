@@ -54,6 +54,18 @@ async function seedDemoUser(
     create: { userId: user.id, companyId, roleId },
   });
 
+  // Sprint 0.6: mesma correção de app/api/register/route.ts — sem uma
+  // CompanyMembership ACTIVE, um seed rodado contra um banco vazio deixaria
+  // os usuários demo bloqueados (NO_ACTIVE_MEMBERSHIP), já que
+  // CompanyMembership é a fonte real de autorização desde a Sprint 0.5.
+  // `update: {}` — nunca sobrescreve uma membership já existente (mesma
+  // disciplina do backfill M2B).
+  await prisma.companyMembership.upsert({
+    where: { userId_companyId: { userId: user.id, companyId } },
+    update: {},
+    create: { userId: user.id, companyId, status: "ACTIVE", activatedAt: new Date() },
+  });
+
   return user;
 }
 
@@ -658,6 +670,18 @@ async function seedSstPortalDemo(companyId: string) {
     });
     user = await prisma.user.findUniqueOrThrow({ where: { id: result.user.id } });
   }
+
+  // Sprint 0.6: este usuário é sobretudo do Portal Consultoria (o `companyId`
+  // acima só satisfaz a constraint NOT NULL do schema), mas também é
+  // exercitado no Portal Empresa em validações manuais — sem uma
+  // CompanyMembership ACTIVE aqui, um banco recriado do zero divergiria do
+  // estado real (onde este usuário já tinha a membership, criada pelo
+  // backfill M2B antes desta sprint existir).
+  await prisma.companyMembership.upsert({
+    where: { userId_companyId: { userId: user.id, companyId } },
+    update: {},
+    create: { userId: user.id, companyId, status: "ACTIVE", activatedAt: new Date() },
+  });
 
   await prisma.sstProviderUser.upsert({
     where: { providerId_userId: { providerId: provider.id, userId: user.id } },

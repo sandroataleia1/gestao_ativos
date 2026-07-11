@@ -1,6 +1,6 @@
 import { cache } from "react";
 import { headers } from "next/headers";
-import { forbidden, unauthorized } from "next/navigation";
+import { forbidden, redirect, unauthorized } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/app/generated/prisma/client";
@@ -23,6 +23,21 @@ export class ForbiddenError extends Error {
   constructor(message = "Acesso negado.") {
     super(message);
     this.name = "ForbiddenError";
+  }
+}
+
+/**
+ * Erro distinguível para o status `SELECTION_REQUIRED` do resolver — Sprint
+ * 0.6, Parte D. Nunca deve ser tratado como um `ForbiddenError` genérico:
+ * páginas redirecionam para `/select-company`; APIs devolvem 409 com
+ * `{ code: "COMPANY_SELECTION_REQUIRED" }` (ver lib/api-errors.ts).
+ */
+export class CompanySelectionRequiredError extends Error {
+  activeMembershipCount: number;
+  constructor(activeMembershipCount: number) {
+    super("Mais de uma empresa disponível — selecione qual empresa usar.");
+    this.name = "CompanySelectionRequiredError";
+    this.activeMembershipCount = activeMembershipCount;
   }
 }
 
@@ -132,7 +147,7 @@ export async function requireCompany(): Promise<{
       userId: user.id,
       activeMembershipCount: result.activeMembershipCount,
     });
-    throw new ForbiddenError("Mais de uma empresa disponível — selecione qual empresa usar.");
+    throw new CompanySelectionRequiredError(result.activeMembershipCount);
   }
 
   if (result.status === "COMPANY_UNAVAILABLE") {
@@ -215,6 +230,49 @@ export async function hasPermission(permission: PermissionKey | (string & {})) {
   }
 }
 
+/**
+ * Variante não-lançável de `requireCompany()` — devolve o `companyId`
+ * resolvido (via `CompanyMembership`, com todas as regras de dual-read) ou
+ * `null` quando não há sessão/membership válida/contexto ambíguo. Usada por
+ * páginas públicas-condicionais (ex.: lib/qr-code.ts) que precisam comparar
+ * "este visitante está na mesma empresa do recurso?" sem travar a página
+ * inteira para quem não tem contexto resolvido (visitante anônimo, por
+ * exemplo). Nunca usar `User.companyId` bruto para essa comparação — Sprint
+ * 0.6, Parte A.2.
+ */
+export async function getResolvedCompanyId(): Promise<string | null> {
+  try {
+    const { companyId } = await requireCompany();
+    return companyId;
+  } catch (error) {
+    if (
+      error instanceof AuthError ||
+      error instanceof ForbiddenError ||
+      error instanceof CompanySelectionRequiredError
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Variante não-lançável e "crua" de `requireCompany()` — devolve o resultado
+ * completo do resolver central (`ResolveCompanyContextResult`), incluindo os
+ * estados que normalmente virariam erro (`SELECTION_REQUIRED`,
+ * `NO_ACTIVE_MEMBERSHIP`, etc.). Usada pela API e pela página de seleção de
+ * empresa (Sprint 0.6, Partes C/D), que precisam DISTINGUIR esses estados
+ * para orientar o usuário — não apenas bloquear. `null` só quando não há
+ * sessão. Nunca usar isto para autorizar acesso a dado de negócio: para
+ * isso, sempre `requireCompany()`/`requirePermission()`.
+ */
+export async function resolveCurrentCompanyContext() {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const requestedCompanyId = await getRequestedCompanyId();
+  return resolveCompanyContext({ userId: user.id, legacyCompanyId: user.companyId, requestedCompanyId });
+}
+
 // --- Variantes para uso direto em Server Components (páginas) ---
 //
 // `requireAuth`/`requirePermission`/`requireRole` lançam AuthError/
@@ -246,6 +304,11 @@ export async function requireCompanyOrDeny() {
     return await requireCompany();
   } catch (error) {
     if (error instanceof AuthError) unauthorized();
+    // SELECTION_REQUIRED nunca é um "acesso negado" genérico — o usuário
+    // está autenticado e tem memberships válidas, só falta escolher qual.
+    // Redireciona para a página dedicada (Sprint 0.6, Parte D) em vez de
+    // renderizar app/forbidden.tsx.
+    if (error instanceof CompanySelectionRequiredError) redirect("/select-company");
     if (error instanceof ForbiddenError) forbidden();
     throw error;
   }
@@ -256,6 +319,7 @@ export async function requirePermissionOrDeny(permission: PermissionKey | (strin
     return await requirePermission(permission);
   } catch (error) {
     if (error instanceof AuthError) unauthorized();
+    if (error instanceof CompanySelectionRequiredError) redirect("/select-company");
     if (error instanceof ForbiddenError) forbidden();
     throw error;
   }
@@ -266,6 +330,7 @@ export async function requireRoleOrDeny(role: SystemRole | (string & {})) {
     return await requireRole(role);
   } catch (error) {
     if (error instanceof AuthError) unauthorized();
+    if (error instanceof CompanySelectionRequiredError) redirect("/select-company");
     if (error instanceof ForbiddenError) forbidden();
     throw error;
   }

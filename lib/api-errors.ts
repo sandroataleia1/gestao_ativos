@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError, flattenError } from "zod";
 
-import { AuthError, ForbiddenError } from "@/lib/auth-server";
+import { AuthError, CompanySelectionRequiredError, ForbiddenError } from "@/lib/auth-server";
 import { Prisma } from "@/app/generated/prisma/client";
 import { captureException } from "@/lib/monitoring";
 import { logError } from "@/lib/logger";
@@ -39,6 +39,17 @@ export class ConflictError extends Error {
 export function handleApiError(error: unknown) {
   if (error instanceof AuthError) {
     return NextResponse.json({ error: error.message }, { status: 401 });
+  }
+  // Código estável (Sprint 0.6, Parte D) — distinto de ForbiddenError: o
+  // usuário está autenticado e tem memberships válidas, só precisa
+  // selecionar qual. Clientes (fetch do app) podem tratar este código
+  // especificamente (ex.: redirecionar para /select-company) em vez de
+  // mostrar um erro genérico de "acesso negado".
+  if (error instanceof CompanySelectionRequiredError) {
+    return NextResponse.json(
+      { code: "COMPANY_SELECTION_REQUIRED", activeMembershipCount: error.activeMembershipCount },
+      { status: 409 },
+    );
   }
   if (error instanceof ForbiddenError) {
     return NextResponse.json({ error: error.message }, { status: 403 });

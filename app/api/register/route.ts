@@ -86,9 +86,20 @@ export async function POST(request: Request) {
   }
 
   const adminRole = roles.get(SYSTEM_ROLES.ADMIN)!;
-  await prisma.userRole.create({
-    data: { userId, companyId: company.id, roleId: adminRole.id },
-  });
+  // Sprint 0.6: sem uma CompanyMembership ACTIVE aqui, o admin recém-criado
+  // fica bloqueado (NO_ACTIVE_MEMBERSHIP) na primeira requisição, já que
+  // CompanyMembership é a fonte real de autorização desde a Sprint 0.5 (ver
+  // docs/adr/ADR-001). `status: ACTIVE`/`activatedAt: now` diretos (não
+  // INVITED) — é o próprio usuário se auto-registrando como dono da empresa
+  // que ele acabou de criar, não um convite de terceiro.
+  await prisma.$transaction([
+    prisma.userRole.create({
+      data: { userId, companyId: company.id, roleId: adminRole.id },
+    }),
+    prisma.companyMembership.create({
+      data: { userId, companyId: company.id, status: "ACTIVE", activatedAt: new Date() },
+    }),
+  ]);
 
   return NextResponse.json({ ok: true });
 }
