@@ -208,9 +208,46 @@ export type SstLinkedCompanySummary = CompanyTrainingMetrics & {
   relationshipStatus: SstProviderCompanyStatus;
 };
 
+const COMPLIANCE_STATUS_RANK: Record<SstComplianceStatus, number> = {
+  CRITICA: 0,
+  ATENCAO: 1,
+  EM_DIA: 2,
+};
+
+function totalPendencyCount(company: CompanyTrainingMetrics): number {
+  return company.expiredCount + company.missingMandatoryCount + company.expiringSoonCount;
+}
+
+/**
+ * Ordem padrão da carteira de empresas (Sprint Demo Comercial SST 1.3, Parte
+ * 5) — Crítica primeiro, depois Atenção, depois Em dia; dentro do mesmo
+ * nível, maior total de pendências, depois maior número de vencidos, depois
+ * menor conformidade, depois nome em ordem alfabética. Determinística (nunca
+ * depende da ordem de retorno do banco) e estável: busca/filtro no client só
+ * removem itens do array já ordenado, nunca reordenam.
+ */
+export function sortCompaniesForConsultancyList<T extends CompanyTrainingMetrics>(companies: T[]): T[] {
+  return [...companies].sort((a, b) => {
+    const statusDiff = COMPLIANCE_STATUS_RANK[a.complianceStatus] - COMPLIANCE_STATUS_RANK[b.complianceStatus];
+    if (statusDiff !== 0) return statusDiff;
+
+    const pendencyDiff = totalPendencyCount(b) - totalPendencyCount(a);
+    if (pendencyDiff !== 0) return pendencyDiff;
+
+    const expiredDiff = b.expiredCount - a.expiredCount;
+    if (expiredDiff !== 0) return expiredDiff;
+
+    const complianceDiff = a.complianceScore - b.complianceScore;
+    if (complianceDiff !== 0) return complianceDiff;
+
+    return a.companyName.localeCompare(b.companyName, "pt-BR");
+  });
+}
+
 /** Empresas com vínculo ACTIVE para o provider informado — nunca lista uma
  * empresa sem vínculo ACTIVE. `providerId` deve vir sempre da sessão
- * (lib/sst-auth.ts), nunca do client. */
+ * (lib/sst-auth.ts), nunca do client. Retorna já na ordem padrão da carteira
+ * (ver `sortCompaniesForConsultancyList`). */
 export async function getLinkedCompaniesWithMetrics(
   providerId: string,
   now = new Date(),
@@ -221,11 +258,12 @@ export async function getLinkedCompaniesWithMetrics(
     orderBy: { createdAt: "asc" },
   });
   const metrics = await Promise.all(links.map((link) => getCompanyTrainingMetrics(link.companyId, now)));
-  return metrics.map((metric, index) => ({
+  const summaries = metrics.map((metric, index) => ({
     ...metric,
     accessLevel: links[index].accessLevel,
     relationshipStatus: links[index].status,
   }));
+  return sortCompaniesForConsultancyList(summaries);
 }
 
 export type SstProviderDashboardSummary = {

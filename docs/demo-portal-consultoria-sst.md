@@ -36,16 +36,17 @@ npm run db:seed-sst-demo
 Válidas **apenas em ambiente local/homologação** — nunca use estas
 credenciais em produção.
 
-| Papel | E-mail | Senha |
-|---|---|---|
-| OWNER (Proprietário) | `sst@demo.com` | `Demo@12345` |
-| TECHNICIAN (Técnico) | `sst-tech@demo.com` | `Demo@12345` |
-| VIEWER (Consulta) | `sst-viewer@demo.com` | `Demo@12345` |
+| Papel | Nome | E-mail | Senha |
+|---|---|---|---|
+| OWNER (Proprietário) | Mariana Costa | `sst@demo.com` | `Demo@12345` |
+| TECHNICIAN (Técnico) | Rafael Almeida | `sst-tech@demo.com` | `Demo@12345` |
+| VIEWER (Consulta) | Juliana Santos | `sst-viewer@demo.com` | `Demo@12345` |
 
 A consultoria de demonstração se chama **"Consultoria Segura SST"**. O
-usuário `sst@demo.com` também tem acesso ao Portal Empresa (empresa
-"Empresa Demo", criada pelo seed principal — `npm run db:seed`) — útil para
-demonstrar a separação entre os dois portais na mesma conta (passo 11).
+usuário `sst@demo.com` (Mariana Costa) também tem acesso ao Portal Empresa
+(empresa "Empresa Demo", criada pelo seed principal — `npm run db:seed`) —
+útil para demonstrar a separação entre os dois portais na mesma conta
+(passo 11).
 
 ### Páginas que devem estar abertas
 

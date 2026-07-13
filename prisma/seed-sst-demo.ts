@@ -24,12 +24,19 @@ import { signUpEmailInternal } from "@/lib/auth";
 const PROVIDER_NAME = "Consultoria Segura SST";
 const DEMO_PASSWORD = "Demo@12345";
 
+// Nomes humanos fictícios (Sprint Demo Comercial SST 1.2/1.3) — o nome
+// anterior ("Técnico Consultoria Segura SST") misturava papel + nome da
+// consultoria e parecia um dado técnico/artificial na demonstração. Só o
+// nome muda aqui; os e-mails continuam no padrão já usado pelo projeto
+// (`<papel>@demo.com`, igual a `admin@demo.com` do seed principal) — trocar
+// e-mail também exigiria migrar contas já semeadas em outros ambientes sem
+// nenhum ganho de apresentação real.
 const OWNER_EMAIL = "sst@demo.com";
-const OWNER_NAME = "Técnico Consultoria Segura SST";
+const OWNER_NAME = "Mariana Costa";
 const TECHNICIAN_EMAIL = "sst-tech@demo.com";
-const TECHNICIAN_NAME = "Técnico SST Demo";
+const TECHNICIAN_NAME = "Rafael Almeida";
 const VIEWER_EMAIL = "sst-viewer@demo.com";
-const VIEWER_NAME = "Visualizador SST Demo";
+const VIEWER_NAME = "Juliana Santos";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MONTH_MS = 30 * DAY_MS;
@@ -63,12 +70,21 @@ async function ensureProvider() {
  * tivesse sido criado antes deste script existir (ou com senha alterada
  * manualmente) ficaria com uma senha desconhecida, e "resetar e semear de
  * novo" não garantiria o login documentado no roteiro (achado na
- * verificação de credenciais da Sprint Demo Comercial SST 1.1). */
+ * verificação de credenciais da Sprint Demo Comercial SST 1.1).
+ *
+ * Também sincroniza `name` a cada execução (Sprint Demo Comercial SST 1.3,
+ * achado durante a validação de idempotência): sem isso, um banco semeado
+ * antes de uma troca de nome (ex.: "Técnico Consultoria Segura SST" ->
+ * "Mariana Costa") ficaria preso ao nome antigo mesmo depois de
+ * `db:reset-sst-demo` + `db:seed-sst-demo`, porque o usuário já existe e era
+ * só devolvido como estava. */
 async function ensurePortalUser(email: string, name: string, anchorCompanyId: string) {
   let user = await prisma.user.findUnique({ where: { email } });
   if (!user) {
     const result = await signUpEmailInternal({ name, email, password: DEMO_PASSWORD, companyId: anchorCompanyId });
     user = await prisma.user.findUniqueOrThrow({ where: { id: result.user.id } });
+  } else if (user.name !== name) {
+    user = await prisma.user.update({ where: { id: user.id }, data: { name } });
   }
 
   const hashedPassword = await hashPassword(DEMO_PASSWORD);

@@ -21,7 +21,9 @@ export default async function SstCompaniesPage() {
     <div className="grid gap-6">
       <div>
         <h1 className="text-2xl font-semibold">Empresas</h1>
-        <p className="text-sm text-muted-foreground">Empresas que autorizaram sua consultoria.</p>
+        <p className="text-sm text-muted-foreground">
+          Acompanhe as empresas vinculadas à sua consultoria e identifique onde agir primeiro.
+        </p>
       </div>
 
       <SstCompaniesList companies={companies} />

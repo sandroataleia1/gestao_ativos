@@ -1,29 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
-import { BuildingIcon, SearchIcon } from "lucide-react";
+import { BuildingIcon, CheckIcon, SearchIcon } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ComplianceStatusBadge } from "@/app/sst/compliance-badge";
 import type { SstLinkedCompanySummary } from "@/lib/sst-dashboard";
-
-const ACCESS_LEVEL_LABELS: Record<string, string> = {
-  VIEW: "Somente consulta",
-  OPERATION: "Operação",
-  ADMINISTRATION: "Administração",
-};
-
-const RELATIONSHIP_STATUS_LABELS: Record<string, string> = {
-  ACTIVE: "Ativo",
-  PENDING: "Pendente",
-  SUSPENDED: "Suspenso",
-  REVOKED: "Revogado",
-};
+import { pluralize } from "@/lib/plural";
+import { filterCompaniesForList } from "@/lib/sst-companies-list";
+import { CompanyListItem } from "./company-list-item";
 
 const STATUS_FILTER_VALUES = ["ALL", "EM_DIA", "ATENCAO", "CRITICA"] as const;
 type StatusFilter = (typeof STATUS_FILTER_VALUES)[number];
@@ -37,25 +24,16 @@ const STATUS_FILTER_LABELS: Record<StatusFilter, string> = {
 
 const PAGE_SIZE = 12;
 
-function hasPendency(company: SstLinkedCompanySummary): boolean {
-  return company.expiredCount > 0 || company.missingMandatoryCount > 0 || company.expiringSoonCount > 0;
-}
-
 export function SstCompaniesList({ companies }: { companies: SstLinkedCompanySummary[] }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
   const [onlyWithPendency, setOnlyWithPendency] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
-  const filtered = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase();
-    return companies.filter((company) => {
-      if (normalizedSearch && !company.companyName.toLowerCase().includes(normalizedSearch)) return false;
-      if (statusFilter !== "ALL" && company.complianceStatus !== statusFilter) return false;
-      if (onlyWithPendency && !hasPendency(company)) return false;
-      return true;
-    });
-  }, [companies, search, statusFilter, onlyWithPendency]);
+  const filtered = useMemo(
+    () => filterCompaniesForList(companies, { search, statusFilter, onlyWithPendency }),
+    [companies, search, statusFilter, onlyWithPendency],
+  );
 
   const visible = filtered.slice(0, visibleCount);
   const hasActiveFilters = search.trim() !== "" || statusFilter !== "ALL" || onlyWithPendency;
@@ -72,6 +50,7 @@ export function SstCompaniesList({ companies }: { companies: SstLinkedCompanySum
               setVisibleCount(PAGE_SIZE);
             }}
             placeholder="Buscar empresa por nome..."
+            aria-label="Buscar empresa por nome"
             className="pl-8"
           />
         </div>
@@ -83,7 +62,7 @@ export function SstCompaniesList({ companies }: { companies: SstLinkedCompanySum
             setVisibleCount(PAGE_SIZE);
           }}
         >
-          <SelectTrigger className="w-full sm:w-48">
+          <SelectTrigger className="w-full sm:w-48" aria-label="Filtrar por situação">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -96,14 +75,35 @@ export function SstCompaniesList({ companies }: { companies: SstLinkedCompanySum
         </Select>
         <Button
           variant={onlyWithPendency ? "default" : "outline"}
+          aria-pressed={onlyWithPendency}
           onClick={() => {
             setOnlyWithPendency((prev) => !prev);
             setVisibleCount(PAGE_SIZE);
           }}
         >
+          {onlyWithPendency ? <CheckIcon /> : null}
           Somente com pendências
         </Button>
       </div>
+
+      {hasActiveFilters ? (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span>Filtros aplicados.</span>
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto p-0"
+            onClick={() => {
+              setSearch("");
+              setStatusFilter("ALL");
+              setOnlyWithPendency(false);
+              setVisibleCount(PAGE_SIZE);
+            }}
+          >
+            Limpar filtros
+          </Button>
+        </div>
+      ) : null}
 
       {filtered.length === 0 ? (
         <Card>
@@ -117,62 +117,27 @@ export function SstCompaniesList({ companies }: { companies: SstLinkedCompanySum
                 ? "Ajuste a busca ou os filtros para ver outras empresas."
                 : "Peça para uma empresa autorizar sua consultoria em Configurações → Prestadores SST."}
             </p>
-            {hasActiveFilters ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setSearch("");
-                  setStatusFilter("ALL");
-                  setOnlyWithPendency(false);
-                  setVisibleCount(PAGE_SIZE);
-                }}
-              >
-                Limpar filtros
-              </Button>
-            ) : null}
           </CardContent>
         </Card>
       ) : (
         <>
-          <ul className="grid gap-3">
+          {/* Grid responsivo — usa a largura disponível em telas largas em
+              vez de uma coluna única esticada com espaço em branco ao lado
+              (2 colunas a partir de lg, 3 em telas bem largas; 1 coluna no
+              mobile, empilhado). */}
+          <ul className="grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
             {visible.map((company) => (
               <li key={company.companyId}>
-                <Card>
-                  <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="grid gap-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium">{company.companyName}</span>
-                        <ComplianceStatusBadge status={company.complianceStatus} />
-                        <Badge variant="outline">
-                          {RELATIONSHIP_STATUS_LABELS[company.relationshipStatus] ?? company.relationshipStatus}
-                        </Badge>
-                        <Badge variant="secondary">
-                          {ACCESS_LEVEL_LABELS[company.accessLevel] ?? company.accessLevel}
-                        </Badge>
-                      </div>
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                        <span>{company.activeEmployeeCount} colaborador(es) ativo(s)</span>
-                        <span>{company.activeTrainingCount} treinamento(s)</span>
-                        <span>{company.expiredCount} vencido(s)</span>
-                        <span>{company.expiringSoonCount} vencendo em 30 dias</span>
-                        <span>{company.missingMandatoryCount} sem treinamento obrigatório</span>
-                        <span>{company.scheduledClassCount} turma(s) agendada(s)</span>
-                        <span>Índice: {company.complianceScore}%</span>
-                      </div>
-                    </div>
-                    <Button size="sm" render={<Link href={`/sst/companies/${company.companyId}`} />}>
-                      Abrir empresa
-                    </Button>
-                  </CardContent>
-                </Card>
+                <CompanyListItem company={company} />
               </li>
             ))}
           </ul>
 
           <div className="flex items-center justify-between text-sm text-muted-foreground">
             <span>
-              Mostrando {visible.length} de {filtered.length} empresa(s)
+              {visibleCount < filtered.length
+                ? `Mostrando 1–${visible.length} de ${pluralize(filtered.length, "empresa", "empresas")}`
+                : pluralize(filtered.length, "empresa encontrada", "empresas encontradas")}
             </span>
             {visibleCount < filtered.length ? (
               <Button variant="outline" size="sm" onClick={() => setVisibleCount((prev) => prev + PAGE_SIZE)}>

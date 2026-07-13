@@ -156,6 +156,19 @@ describe("Sprint Demo Comercial SST 1.0, Parte 13 — idempotência do seed de d
     const providerUsers = await prisma.sstProviderUser.findMany({ where: { providerId: provider.id } });
     expect(providerUsers).toHaveLength(3);
 
+    // Sprint Demo Comercial SST 1.3, caso 15 — os 3 usuários de portal usam
+    // nomes humanos fictícios (não mais "Técnico Consultoria Segura SST",
+    // que misturava papel + nome da consultoria e parecia artificial na
+    // demonstração); rodar o seed de novo não deve alterar nem duplicar.
+    const [owner, technician, viewer] = await Promise.all([
+      prisma.user.findUnique({ where: { email: "sst@demo.com" } }),
+      prisma.user.findUnique({ where: { email: "sst-tech@demo.com" } }),
+      prisma.user.findUnique({ where: { email: "sst-viewer@demo.com" } }),
+    ]);
+    expect(owner?.name).toBe("Mariana Costa");
+    expect(technician?.name).toBe("Rafael Almeida");
+    expect(viewer?.name).toBe("Juliana Santos");
+
     const companyIdsFromSeed = companies.map((c) => c.id);
     const employeeCount = await prisma.employee.count({ where: { companyId: { in: companyIdsFromSeed } } });
     // 4 + 5 + 4 + 3 + 5 = 21 colaboradores fictícios no total, fixo pelo
