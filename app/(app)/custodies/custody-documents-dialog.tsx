@@ -117,9 +117,10 @@ export function CustodyDocumentsDialog({
           {custody ? (
             <div className="grid max-h-[70vh] gap-4 overflow-y-auto pr-1">
               {/* O termo de entrega é gerado automaticamente ao registrar a
-                  entrega (ver deliver-form.tsx — QR Code ou WhatsApp), então
-                  não há mais botão manual pra ele aqui. O de devolução ainda
-                  não tem esse fluxo automático, por isso continua manual. */}
+                  entrega (ver app/(app)/custodies/new/step-confirm.tsx — QR
+                  Code ou WhatsApp), então não há mais botão manual pra ele
+                  aqui. O de devolução ainda não tem esse fluxo automático,
+                  por isso continua manual. */}
               {canManage && custody.status === "RETURNED" ? (
                 <>
                   <div className="flex flex-wrap gap-2">

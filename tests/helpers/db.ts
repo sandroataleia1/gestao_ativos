@@ -190,6 +190,15 @@ export async function cleanupFixtures(params: {
     await prisma.stockMovement.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.assetMovement.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.assetUnit.updateMany({ where: { companyId: { in: companyIds } }, data: { currentCustodyId: null } });
+    // Termo/assinatura/foto de custódia (Sprint Demo Comercial — Wizard de
+    // Nova Entrega, primeiro teste a exercitar o fluxo de assinatura via
+    // este helper): todos referenciam AssetCustody (e CustodySignature/
+    // CustodySignatureRequest também referenciam CustodyDocument), então
+    // saem antes dela.
+    await prisma.custodySignature.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.custodySignatureRequest.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.custodyDocument.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.custodyPhoto.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.assetCustody.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.assetUnit.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.asset.deleteMany({ where: { companyId: { in: companyIds } } });

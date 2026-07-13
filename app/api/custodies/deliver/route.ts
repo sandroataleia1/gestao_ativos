@@ -7,6 +7,7 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { handleApiError, ValidationError } from "@/lib/api-errors";
 import { logAudit } from "@/lib/audit";
 import { invalidateCompanyData } from "@/lib/cache";
+import { withIdempotencyKey } from "@/lib/idempotency";
 import { custodyDeliverInputSchema } from "@/lib/validations/custody";
 import { assertAssetBelongsToCompany, getMovementType } from "@/lib/stock";
 import { normalizeWhatsAppPhone, sendWhatsAppMessage } from "@/lib/evolution-api";
@@ -87,7 +88,21 @@ async function deliverSignatureRequestByWhatsApp(params: {
 //     colaborador + AssetMovement DELIVERY.
 // Em ambos os casos, cria um AssetCustody novo (nunca reaproveita um
 // existente) e nunca aceita companyId do client.
+//
+// `POST` é só um wrapper fino de idempotência (ver lib/idempotency.ts) em
+// volta de `handleDeliver`, que tem a lógica de sempre — nenhum client
+// existente quebra: sem o header `Idempotency-Key`, o comportamento é
+// idêntico ao de antes desta sprint.
 export async function POST(request: Request) {
+  const idempotencyKey = request.headers.get("Idempotency-Key");
+  const { status, body } = await withIdempotencyKey(idempotencyKey, async () => {
+    const response = await handleDeliver(request);
+    return { status: response.status, body: await response.json() };
+  });
+  return NextResponse.json(body, { status });
+}
+
+async function handleDeliver(request: Request): Promise<NextResponse> {
   try {
     const { companyId, user } = await requirePermission(PERMISSIONS.CUSTODY_MANAGE);
 

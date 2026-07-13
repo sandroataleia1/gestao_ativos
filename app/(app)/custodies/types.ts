@@ -2,7 +2,14 @@ import type { TrackingMode } from "@/app/generated/prisma/client";
 
 export type LookupOption = { id: string; name: string };
 
-export type EmployeeOption = { id: string; name: string; document: string; phone: string | null };
+export type EmployeeOption = {
+  id: string;
+  name: string;
+  document: string;
+  phone: string | null;
+  position: string | null;
+  department: string | null;
+};
 
 export type AssetOption = {
   id: string;
@@ -17,7 +24,15 @@ export type AssetUnitOption = {
   assetId: string;
   serialNumber: string | null;
   patrimonyNumber: string | null;
+  condition: string | null;
 };
+
+/** Saldo disponível por ativo consumível no almoxarifado — Sprint Demo
+ * Comercial (Wizard de Nova Entrega), Parte 4. Mesma origem de dado que a
+ * própria rota de entrega usa para decrementar o estoque (StockBalance no
+ * local de almoxarifado), então o saldo mostrado nunca diverge da regra
+ * real de bloqueio. */
+export type AssetBalanceMap = Record<string, number>;
 
 export type CustodyRow = {
   id: string;

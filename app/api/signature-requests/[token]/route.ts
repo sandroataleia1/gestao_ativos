@@ -56,7 +56,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
 // Também pública — quem assina aqui normalmente não tem conta no sistema.
 // Nome/documento do assinante nunca vêm do body: são sempre lidos do
 // colaborador da própria custódia (mesma decisão já tomada para a
-// assinatura presencial em app/(app)/custodies/deliver-form.tsx).
+// assinatura presencial em app/(app)/custodies/new/step-confirm.tsx).
 export async function POST(request: Request, { params }: RouteParams) {
   try {
     const { token } = await params;
