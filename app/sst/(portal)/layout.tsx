@@ -27,15 +27,20 @@ export default async function SstLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b bg-card px-6 py-3">
+      {/* Mesma cor da sidebar do Portal Empresa no tema claro
+          (components/layout/sidebar.tsx) — só no claro: no escuro, volta ao
+          bg-card/border-border padrão do resto do portal. */}
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-blue-900 bg-blue-950 px-6 py-3 dark:border-border dark:bg-card">
         <div className="flex flex-wrap items-center gap-4 sm:gap-6">
           <Link href="/sst/dashboard" className="flex items-center gap-2">
-            <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <span className="flex size-7 items-center justify-center rounded-lg bg-white/10 text-white dark:bg-primary/10 dark:text-primary">
               <ShieldCheckIcon className="size-4" />
             </span>
             <span className="leading-tight">
-              <span className="block font-heading text-base font-semibold">{sstProviderUser.provider.name}</span>
-              <span className="block text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+              <span className="block font-heading text-base font-semibold text-zinc-50 dark:text-foreground">
+                {sstProviderUser.provider.name}
+              </span>
+              <span className="block text-[11px] font-medium tracking-wide text-blue-100/60 uppercase dark:text-muted-foreground">
                 Portal Consultoria
               </span>
             </span>
@@ -43,10 +48,19 @@ export default async function SstLayout({ children }: { children: React.ReactNod
           <SstNav />
         </div>
         <div className="flex items-center gap-3">
-          <Badge variant="outline" className="hidden sm:inline-flex">
+          <Badge
+            variant="outline"
+            className="hidden border-white/25 text-blue-50 sm:inline-flex dark:border-border dark:text-foreground"
+          >
             {ROLE_LABELS[sstProviderUser.role] ?? sstProviderUser.role}
           </Badge>
-          <UserMenu name={user.name} email={user.email} signOutRedirectTo="/sst/login" />
+          <UserMenu
+            name={user.name}
+            email={user.email}
+            signOutRedirectTo="/sst/login"
+            triggerClassName="text-blue-50 hover:bg-white/10 hover:text-white dark:text-foreground dark:hover:bg-muted"
+            emailClassName="text-blue-100/60 dark:text-muted-foreground"
+          />
         </div>
       </header>
       <main className="flex-1 bg-muted/30 p-6">{children}</main>

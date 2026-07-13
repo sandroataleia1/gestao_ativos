@@ -20,7 +20,11 @@ export function SstNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="flex items-center gap-1 text-sm font-medium text-muted-foreground">
+    // Mesmas cores da navegação da sidebar do Portal Empresa no tema claro
+    // (components/layout/sidebar.tsx, NavLink) — fundo da topbar agora é o
+    // mesmo azul-escuro, então os links precisam do mesmo tratamento claro/
+    // escuro para continuar legíveis.
+    <nav className="flex items-center gap-1 text-sm font-medium text-blue-100/70 dark:text-muted-foreground">
       {NAV_ITEMS.map((item) => {
         const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
         return (
@@ -28,8 +32,9 @@ export function SstNav() {
             key={item.href}
             href={item.href}
             className={cn(
-              "rounded-md px-3 py-1.5 transition-colors hover:bg-muted hover:text-foreground",
-              isActive && "bg-primary/10 text-primary hover:bg-primary/10 hover:text-primary",
+              "rounded-md px-3 py-1.5 transition-colors hover:bg-white/10 hover:text-white dark:hover:bg-muted dark:hover:text-foreground",
+              isActive &&
+                "bg-white/10 text-white hover:bg-white/15 hover:text-white dark:bg-primary/10 dark:text-primary dark:hover:bg-primary/15 dark:hover:text-primary",
             )}
           >
             {item.label}

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { LogOutIcon } from "lucide-react";
 
+import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth-client";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,8 @@ export function UserMenu({
   name,
   email,
   signOutRedirectTo = "/login",
+  triggerClassName,
+  emailClassName,
 }: {
   name: string;
   email: string;
@@ -34,6 +37,14 @@ export function UserMenu({
   // para /login (Portal Empresa) — ver Sprint Demo Comercial SST 1.0,
   // Parte 4 ("links que retornam ao Portal Empresa indevidamente").
   signOutRedirectTo?: string;
+  // Cor da topbar da consultoria SST passou a ser azul-escura no tema claro
+  // (mesma cor da sidebar do Portal Empresa) — o botão-gatilho (ghost, sem
+  // cor de texto própria) ficaria ilegível nesse fundo sem uma cor explícita.
+  // Opcional para não afetar o Portal Empresa, que continua com fundo claro.
+  triggerClassName?: string;
+  // Mesma razão do `triggerClassName` acima, mas para o e-mail inline
+  // (text-muted-foreground não tem contraste suficiente sobre azul-escuro).
+  emailClassName?: string;
 }) {
   const router = useRouter();
   const [isSigningOut, setIsSigningOut] = useState(false);
@@ -49,13 +60,17 @@ export function UserMenu({
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
-          <Button variant="ghost" className="h-auto gap-2 px-2 py-1.5" aria-label={`Menu de ${name}`}>
+          <Button
+            variant="ghost"
+            className={cn("h-auto gap-2 px-2 py-1.5", triggerClassName)}
+            aria-label={`Menu de ${name}`}
+          >
             <Avatar size="sm">
               <AvatarFallback>{initialsFor(name)}</AvatarFallback>
             </Avatar>
             <span className="hidden text-left text-sm leading-tight sm:block">
               <span className="block font-medium">{name}</span>
-              <span className="block text-xs text-muted-foreground">{email}</span>
+              <span className={cn("block text-xs text-muted-foreground", emailClassName)}>{email}</span>
             </span>
           </Button>
         }
