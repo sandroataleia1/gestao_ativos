@@ -2,7 +2,47 @@ import { cache } from "react";
 
 import { prisma } from "@/lib/prisma";
 import { getStockSummary, toNumber } from "@/lib/stock";
-import { getCaAlerts, getCustodyOverdueAlerts, getLowStockAlerts } from "@/lib/alerts";
+import { type Alert, getCaAlerts, getCustodyOverdueAlerts, getLowStockAlerts } from "@/lib/alerts";
+
+const SEVERITY_ORDER: Record<Alert["severity"], number> = { CRITICAL: 0, WARNING: 1, INFO: 2 };
+
+export type QuickActionKey = "custody" | "stock" | "employee" | "asset";
+
+export type QuickActionDefinition = {
+  key: QuickActionKey;
+  label: string;
+  href: string;
+};
+
+const QUICK_ACTION_CATALOG: QuickActionDefinition[] = [
+  { key: "custody", label: "Nova entrega", href: "/custodies/new" },
+  { key: "stock", label: "Entrada de estoque", href: "/stock/new" },
+  { key: "employee", label: "Novo colaborador", href: "/employees/new" },
+  { key: "asset", label: "Novo ativo", href: "/assets/new" },
+];
+
+/**
+ * Sprint Demo Comercial SST 1.2, Parte 8 — ordena as ações rápidas do
+ * dashboard por prioridade fixa e remove as que o usuário não pode
+ * executar. Função pura (sem JSX/ícone) para poder testar diretamente,
+ * sem precisar renderizar a página — a interface (app/(app)/dashboard/
+ * page.tsx) só combina o resultado com o ícone de cada `key` e decide
+ * primário/secundário/"Mais ações" pela posição no array.
+ */
+export function buildDashboardQuickActions(permissions: {
+  canManageCustody: boolean;
+  canManageStock: boolean;
+  canManageEmployee: boolean;
+  canManageAsset: boolean;
+}): QuickActionDefinition[] {
+  const allowedKeys: Record<QuickActionKey, boolean> = {
+    custody: permissions.canManageCustody,
+    stock: permissions.canManageStock,
+    employee: permissions.canManageEmployee,
+    asset: permissions.canManageAsset,
+  };
+  return QUICK_ACTION_CATALOG.filter((action) => allowedKeys[action.key]);
+}
 
 // Dividido em duas funções (em vez de uma `getDashboardSummary` só) pra
 // permitir que app/(app)/dashboard/page.tsx renderize os cards rápidos
@@ -40,22 +80,27 @@ export const getDashboardAlertsSummary = cache(async (companyId: string) => {
     getLowStockAlerts(companyId, now),
   ]);
 
-  const criticalAlerts = [...caAlerts, ...custodyOverdueAlerts, ...lowStockAlerts].filter(
-    (alert) => alert.severity === "CRITICAL",
-  );
+  const allAlerts = [...caAlerts, ...custodyOverdueAlerts, ...lowStockAlerts];
+  const criticalAlerts = allAlerts.filter((alert) => alert.severity === "CRITICAL");
 
   return {
     criticalAlerts,
     // Lista completa (WARNING + CRITICAL) das entregas atrasadas — diferente
     // de `criticalAlerts`, que só pega severidade CRITICAL (atraso > 7 dias)
     // e por isso deixava passar em branco, sem alerta nenhum no dashboard,
-    // uma entrega recém-atrasada (1 a 7 dias). Ver card "Entregas atrasadas"
-    // em app/(app)/dashboard/page.tsx.
+    // uma entrega recém-atrasada (1 a 7 dias).
     overdueCustodyAlerts: custodyOverdueAlerts,
     caExpiringSoonCount: caAlerts.filter((alert) => alert.type === "CA_EXPIRING_SOON").length,
     caExpiredCount: caAlerts.filter((alert) => alert.type === "CA_EXPIRED").length,
     overdueCustodyCount: custodyOverdueAlerts.length,
     lowStockCount: lowStockAlerts.length,
+    // Sprint Demo Comercial SST 1.2, Parte 10 — lista única (todas as
+    // severidades, todos os tipos) para a seção "Pendências prioritárias"
+    // do dashboard, substituindo os blocos separados e sobrepostos que
+    // existiam antes (mini-indicadores + "Entregas atrasadas" + "Alertas
+    // críticos" mostravam a mesma custódia atrasada em até 3 lugares).
+    // Mesmos dados já calculados acima — nenhuma consulta nova.
+    priorityAlerts: allAlerts.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]),
   };
 });
 

@@ -28,6 +28,7 @@ export function UserMenu({
   name,
   email,
   signOutRedirectTo = "/login",
+  showEmailInline = true,
   triggerClassName,
   emailClassName,
 }: {
@@ -37,6 +38,11 @@ export function UserMenu({
   // para /login (Portal Empresa) — ver Sprint Demo Comercial SST 1.0,
   // Parte 4 ("links que retornam ao Portal Empresa indevidamente").
   signOutRedirectTo?: string;
+  // Sprint Demo Comercial SST 1.2, Parte 5 — o Portal Empresa não repete o
+  // e-mail no gatilho da topbar (já fica dentro do menu). Default `true`
+  // preserva o comportamento exato já em uso pelo Portal Consultoria
+  // (app/sst/(portal)/layout.tsx).
+  showEmailInline?: boolean;
   // Cor da topbar da consultoria SST passou a ser azul-escura no tema claro
   // (mesma cor da sidebar do Portal Empresa) — o botão-gatilho (ghost, sem
   // cor de texto própria) ficaria ilegível nesse fundo sem uma cor explícita.
@@ -70,7 +76,9 @@ export function UserMenu({
             </Avatar>
             <span className="hidden text-left text-sm leading-tight sm:block">
               <span className="block font-medium">{name}</span>
-              <span className={cn("block text-xs text-muted-foreground", emailClassName)}>{email}</span>
+              {showEmailInline ? (
+                <span className={cn("block text-xs text-muted-foreground", emailClassName)}>{email}</span>
+              ) : null}
             </span>
           </Button>
         }

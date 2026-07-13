@@ -5,9 +5,10 @@ import {
   AlertTriangleIcon,
   ArrowRightIcon,
   BoxesIcon,
-  CheckCircle2Icon,
+  ChevronDownIcon,
   FileWarningIcon,
   HistoryIcon,
+  MoreHorizontalIcon,
   PackageIcon,
   PackagePlusIcon,
   PlusIcon,
@@ -15,10 +16,14 @@ import {
   UserPlusIcon,
 } from "lucide-react";
 
-import type { AlertSeverity } from "@/lib/alerts";
 import { getCurrentCompany, hasPermission, requireCompanyOrDeny } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
-import { getDashboardFastSummary, getRecentMovements } from "@/lib/dashboard";
+import {
+  buildDashboardQuickActions,
+  getDashboardFastSummary,
+  getRecentMovements,
+  type QuickActionKey,
+} from "@/lib/dashboard";
 import { getCachedDashboardAlertsSummary } from "@/lib/cache";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,6 +34,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Table,
   TableBody,
   TableCell,
@@ -37,22 +48,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { HintIcon } from "./hint-icon";
+import { PriorityAlerts } from "./priority-alerts";
 
 const CA_HINT = "CA = Certificado de Aprovação, exigido para alguns equipamentos de proteção (EPIs).";
 
 export const metadata: Metadata = {
-  title: "Dashboard — Gestão de Ativos",
+  title: "Visão geral — Patrium",
 };
 
 function formatDateTime(iso: string) {
   return new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
 }
-
-const OVERDUE_SEVERITY_BADGE: Record<AlertSeverity, { label: string; variant: "destructive" | "outline" }> = {
-  CRITICAL: { label: "Crítico", variant: "destructive" },
-  WARNING: { label: "Atenção", variant: "outline" },
-  INFO: { label: "Info", variant: "outline" },
-};
 
 type IconType = typeof PackageIcon;
 
@@ -62,27 +68,47 @@ function SummaryCardShell({
   icon: Icon,
   href,
   hint,
+  emphasis,
 }: {
   label: string;
   value: number | string;
   icon: IconType;
   href: string;
   hint?: string;
+  /** Cards de pendência usam vermelho só quando há algo crítico de fato —
+   * nunca decorativo (Parte 9: "a cor vermelha deve continuar reservada a
+   * situações críticas"). */
+  emphasis?: boolean;
 }) {
   return (
-    <Link href={href} className="block">
-      <Card className="h-full transition-colors hover:border-primary/40 hover:bg-muted/40">
+    <Link
+      href={href}
+      className="block rounded-xl focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+    >
+      <Card
+        className={
+          emphasis
+            ? "h-full cursor-pointer border-destructive/30 transition-colors hover:border-destructive/60 hover:bg-destructive/5"
+            : "h-full cursor-pointer transition-colors hover:border-primary/40 hover:bg-muted/40"
+        }
+      >
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground">
             {label}
             {hint ? <HintIcon hint={hint} /> : null}
           </CardTitle>
-          <span className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <span
+            className={
+              emphasis
+                ? "flex size-8 items-center justify-center rounded-lg bg-destructive/10 text-destructive"
+                : "flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
+            }
+          >
             <Icon className="size-4" />
           </span>
         </CardHeader>
         <CardContent>
-          <p className="text-2xl font-semibold">{value}</p>
+          <p className={emphasis ? "text-2xl font-semibold text-destructive" : "text-2xl font-semibold"}>{value}</p>
         </CardContent>
       </Card>
     </Link>
@@ -105,15 +131,6 @@ function SummaryCardSkeleton({ label, icon: Icon }: { label: string; icon: IconT
   );
 }
 
-function IndicatorSkeleton() {
-  return (
-    <div className="flex items-center justify-between gap-2 rounded-lg border bg-card px-4 py-3">
-      <div className="h-4 w-24 animate-pulse rounded bg-muted" />
-      <div className="h-5 w-8 animate-pulse rounded bg-muted" />
-    </div>
-  );
-}
-
 function CardSkeleton({ title }: { title: string }) {
   return (
     <Card>
@@ -130,118 +147,46 @@ function CardSkeleton({ title }: { title: string }) {
   );
 }
 
-/** Cards/indicadores/listas que dependem dos 3 tipos de alerta (CA, custódia
- * atrasada, estoque baixo) — a parte mais cara do dashboard. Fica atrás de
- * `<Suspense>` em page.tsx para não atrasar a renderização dos cards
- * rápidos (posse/estoque) acima. `getDashboardAlertsSummary` é `cache()`d,
- * então mesmo aparecendo aqui e nos indicadores operacionais/cards abaixo,
- * as consultas de alerta rodam uma única vez por requisição. */
+/** Cards que dependem dos 3 tipos de alerta (CA, custódia atrasada, estoque
+ * baixo) — a parte mais cara do dashboard. Fica atrás de `<Suspense>` em
+ * page.tsx para não atrasar a renderização dos cards rápidos (posse/estoque)
+ * acima. `getCachedDashboardAlertsSummary` já é cacheado por empresa. */
 async function AlertsDependentSection({ companyId }: { companyId: string }) {
   const alerts = await getCachedDashboardAlertsSummary(companyId);
 
-  const alertSummaryCards = [
-    { label: "Alertas críticos", value: alerts.criticalAlerts.length, icon: AlertTriangleIcon, href: "/alerts" },
-    {
-      label: "CAs vencendo em 30 dias",
-      value: alerts.caExpiringSoonCount,
-      icon: FileWarningIcon,
-      href: "/reports",
-      hint: CA_HINT,
-    },
-  ];
-
-  const operationalIndicators = [
-    { label: "Custódias atrasadas", value: alerts.overdueCustodyCount, href: "/custodies" },
-    { label: "Estoque crítico", value: alerts.lowStockCount, href: "/stock" },
-    { label: "CAs vencidos", value: alerts.caExpiredCount, href: "/reports", hint: CA_HINT },
-    { label: "CAs vencendo", value: alerts.caExpiringSoonCount, href: "/reports", hint: CA_HINT },
-  ];
-
   return (
     <>
-      {alertSummaryCards.map(({ label, value, icon, href, hint }) => (
-        <SummaryCardShell key={label} label={label} value={value} icon={icon} href={href} hint={hint} />
-      ))}
-
-      <div className="col-span-full grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {operationalIndicators.map(({ label, value, href, hint }) => (
-          <Link key={label} href={href} className="block">
-            <div className="flex items-center justify-between gap-2 rounded-lg border bg-card px-4 py-3 transition-colors hover:border-primary/40 hover:bg-muted/40">
-              <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                {label}
-                {hint ? <HintIcon hint={hint} /> : null}
-              </span>
-              <span className="text-lg font-semibold">{value}</span>
-            </div>
-          </Link>
-        ))}
-      </div>
+      <SummaryCardShell
+        label="Pendências críticas"
+        value={alerts.criticalAlerts.length}
+        icon={AlertTriangleIcon}
+        href="/alerts"
+        emphasis={alerts.criticalAlerts.length > 0}
+      />
+      <SummaryCardShell
+        label="CAs a vencer"
+        value={alerts.caExpiringSoonCount}
+        icon={FileWarningIcon}
+        href="/reports"
+        hint={CA_HINT}
+      />
 
       <Card className="col-span-full">
-        <CardHeader className="flex flex-row items-center justify-between">
+        <CardHeader className="flex flex-row items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <TruckIcon className="size-4 text-destructive" />
-            <CardTitle className="text-sm font-medium text-muted-foreground">Entregas atrasadas</CardTitle>
+            <AlertTriangleIcon className="size-4 text-primary" />
+            <CardTitle className="text-sm font-medium text-muted-foreground">Pendências prioritárias</CardTitle>
           </div>
           <Link
-            href="/custodies"
-            className="flex items-center gap-1 text-xs font-medium text-primary underline underline-offset-4"
+            href="/alerts"
+            className="flex shrink-0 items-center gap-1 text-xs font-medium text-primary underline underline-offset-4"
           >
             Ver todas
             <ArrowRightIcon className="size-3" />
           </Link>
         </CardHeader>
         <CardContent>
-          {alerts.overdueCustodyAlerts.length ? (
-            <ul className="grid gap-2 text-sm">
-              {alerts.overdueCustodyAlerts.slice(0, 5).map((alert) => (
-                <li key={alert.id} className="flex items-center justify-between gap-4">
-                  <span className="truncate">{alert.title}</span>
-                  <Badge variant={OVERDUE_SEVERITY_BADGE[alert.severity].variant}>
-                    {OVERDUE_SEVERITY_BADGE[alert.severity].label}
-                  </Badge>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <CheckCircle2Icon className="size-4 text-emerald-600 dark:text-emerald-500" />
-              <span>Nenhuma entrega atrasada.</span>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card className="col-span-full">
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div className="flex items-center gap-2">
-            <AlertTriangleIcon className="size-4 text-destructive" />
-            <CardTitle className="text-sm font-medium text-muted-foreground">Alertas críticos</CardTitle>
-          </div>
-          <Link
-            href="/alerts"
-            className="flex items-center gap-1 text-xs font-medium text-primary underline underline-offset-4"
-          >
-            Ver todos
-            <ArrowRightIcon className="size-3" />
-          </Link>
-        </CardHeader>
-        <CardContent>
-          {alerts.criticalAlerts.length ? (
-            <ul className="grid gap-2 text-sm">
-              {alerts.criticalAlerts.slice(0, 5).map((alert) => (
-                <li key={alert.id} className="flex items-center justify-between gap-4">
-                  <span className="truncate">{alert.title}</span>
-                  <Badge variant="destructive">Crítico</Badge>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <CheckCircle2Icon className="size-4 text-emerald-600 dark:text-emerald-500" />
-              <span>Tudo certo. Nenhum alerta crítico encontrado.</span>
-            </div>
-          )}
+          <PriorityAlerts alerts={alerts.priorityAlerts} />
         </CardContent>
       </Card>
     </>
@@ -254,14 +199,14 @@ async function RecentMovementsSection({ companyId }: { companyId: string }) {
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between">
+      <CardHeader className="flex flex-row items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <HistoryIcon className="size-4 text-primary" />
           <CardTitle className="text-sm font-medium text-muted-foreground">Últimas movimentações</CardTitle>
         </div>
         <Link
           href="/stock"
-          className="flex items-center gap-1 text-xs font-medium text-primary underline underline-offset-4"
+          className="flex shrink-0 items-center gap-1 text-xs font-medium text-primary underline underline-offset-4"
         >
           Ver histórico completo
           <ArrowRightIcon className="size-3" />
@@ -269,30 +214,32 @@ async function RecentMovementsSection({ companyId }: { companyId: string }) {
       </CardHeader>
       <CardContent>
         {recentMovements.length ? (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Tipo</TableHead>
-                <TableHead>Ativo</TableHead>
-                <TableHead>Colaborador</TableHead>
-                <TableHead>Data/hora</TableHead>
-                <TableHead>Usuário responsável</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {recentMovements.map((movement) => (
-                <TableRow key={movement.id}>
-                  <TableCell>
-                    <Badge variant="outline">{movement.type}</Badge>
-                  </TableCell>
-                  <TableCell>{movement.assetName}</TableCell>
-                  <TableCell>{movement.employeeName ?? "—"}</TableCell>
-                  <TableCell>{formatDateTime(movement.executedAt)}</TableCell>
-                  <TableCell>{movement.userName ?? "—"}</TableCell>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Tipo</TableHead>
+                  <TableHead>Ativo</TableHead>
+                  <TableHead className="hidden sm:table-cell">Colaborador</TableHead>
+                  <TableHead className="hidden md:table-cell">Data/hora</TableHead>
+                  <TableHead className="hidden lg:table-cell">Usuário responsável</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {recentMovements.map((movement) => (
+                  <TableRow key={movement.id}>
+                    <TableCell>
+                      <Badge variant="outline">{movement.type}</Badge>
+                    </TableCell>
+                    <TableCell>{movement.assetName}</TableCell>
+                    <TableCell className="hidden sm:table-cell">{movement.employeeName ?? "—"}</TableCell>
+                    <TableCell className="hidden md:table-cell">{formatDateTime(movement.executedAt)}</TableCell>
+                    <TableCell className="hidden lg:table-cell">{movement.userName ?? "—"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         ) : (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <HistoryIcon className="size-4" />
@@ -305,7 +252,7 @@ async function RecentMovementsSection({ companyId }: { companyId: string }) {
 }
 
 export default async function DashboardPage() {
-  const { user, companyId } = await requireCompanyOrDeny();
+  const { companyId } = await requireCompanyOrDeny();
   const company = await getCurrentCompany(companyId);
   const [canViewAlerts, canManageAsset, canManageCustody, canManageStock, canManageEmployee] =
     await Promise.all([
@@ -321,33 +268,71 @@ export default async function DashboardPage() {
   // um no seu próprio <Suspense> (ver docs/performance.md).
   const fastSummary = await getDashboardFastSummary(companyId);
 
-  const quickActions = [
-    canManageAsset ? { label: "Novo ativo", href: "/assets/new", icon: PackagePlusIcon } : null,
-    canManageCustody ? { label: "Nova entrega", href: "/custodies/new", icon: TruckIcon } : null,
-    canManageEmployee
-      ? { label: "Novo colaborador", href: "/employees/new", icon: UserPlusIcon }
-      : null,
-    canManageStock ? { label: "Entrada de estoque", href: "/stock/new", icon: BoxesIcon } : null,
-  ].filter((action): action is { label: string; href: string; icon: typeof PackagePlusIcon } => action !== null);
+  // Sprint Demo Comercial SST 1.2, Parte 8 — hierarquia visual entre as
+  // ações rápidas: a primeira disponível (nesta ordem de prioridade) vira o
+  // botão primário, a segunda vira secundário, e o resto (se houver) some
+  // dentro de "Mais ações" — nunca todas com o mesmo peso competindo com o
+  // título da página. Ordenação/filtro por permissão vêm de
+  // lib/dashboard.ts (buildDashboardQuickActions), testado isoladamente.
+  const QUICK_ACTION_ICONS: Record<QuickActionKey, typeof TruckIcon> = {
+    custody: TruckIcon,
+    stock: BoxesIcon,
+    employee: UserPlusIcon,
+    asset: PackagePlusIcon,
+  };
+  const actionsInPriorityOrder = buildDashboardQuickActions({
+    canManageCustody,
+    canManageStock,
+    canManageEmployee,
+    canManageAsset,
+  }).map((action) => ({ ...action, icon: QUICK_ACTION_ICONS[action.key] }));
+
+  const [primaryAction, secondaryAction, ...overflowActions] = actionsInPriorityOrder;
 
   return (
     <div className="grid gap-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">Olá, {user.name}</h1>
+          <h1 className="text-2xl font-semibold">Visão geral</h1>
           <p className="text-sm text-muted-foreground">
-            {user.email} · {company?.name ?? "Empresa não encontrada"}
+            Acompanhe ativos, entregas, estoque, treinamentos e alertas
+            {company?.name ? ` da ${company.name}` : ""}.
           </p>
         </div>
 
-        {quickActions.length ? (
-          <div className="flex flex-wrap gap-2">
-            {quickActions.map(({ label, href, icon: Icon }) => (
-              <Button key={href} variant="outline" render={<Link href={href} />}>
+        {primaryAction ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button render={<Link href={primaryAction.href} />}>
+              <PlusIcon className="size-4" />
+              {primaryAction.label}
+            </Button>
+            {secondaryAction ? (
+              <Button variant="outline" render={<Link href={secondaryAction.href} />}>
                 <PlusIcon className="size-4" />
-                {label}
+                {secondaryAction.label}
               </Button>
-            ))}
+            ) : null}
+            {overflowActions.length ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button variant="outline" aria-label="Mais ações">
+                      <span className="hidden sm:inline">Mais ações</span>
+                      <MoreHorizontalIcon className="size-4 sm:hidden" />
+                      <ChevronDownIcon className="hidden size-3.5 sm:inline" />
+                    </Button>
+                  }
+                />
+                <DropdownMenuContent align="end">
+                  {overflowActions.map(({ label, href, icon: Icon }) => (
+                    <DropdownMenuItem key={href} render={<Link href={href} />}>
+                      <Icon className="size-4" />
+                      {label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -370,19 +355,10 @@ export default async function DashboardPage() {
           <Suspense
             fallback={
               <>
-                <SummaryCardSkeleton label="Alertas críticos" icon={AlertTriangleIcon} />
-                <SummaryCardSkeleton label="CAs vencendo em 30 dias" icon={FileWarningIcon} />
-                <div className="col-span-full grid grid-cols-2 gap-3 lg:grid-cols-4">
-                  <IndicatorSkeleton />
-                  <IndicatorSkeleton />
-                  <IndicatorSkeleton />
-                  <IndicatorSkeleton />
-                </div>
+                <SummaryCardSkeleton label="Pendências críticas" icon={AlertTriangleIcon} />
+                <SummaryCardSkeleton label="CAs a vencer" icon={FileWarningIcon} />
                 <div className="col-span-full">
-                  <CardSkeleton title="Entregas atrasadas" />
-                </div>
-                <div className="col-span-full">
-                  <CardSkeleton title="Alertas críticos" />
+                  <CardSkeleton title="Pendências prioritárias" />
                 </div>
               </>
             }

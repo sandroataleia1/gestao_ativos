@@ -182,6 +182,23 @@ export async function cleanupFixtures(params: {
     // caso algum tenha sido criado por um provider não rastreado).
     await prisma.sstProviderCompany.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.auditLog.deleteMany({ where: { companyId: { in: companyIds } } });
+    // Cadeia de ativos/estoque (Sprint Demo Comercial SST 1.2 — primeiro
+    // teste a criar Asset/StockBalance via este helper, ver
+    // tests/tenant-isolation/dashboard-alerts-scope.test.ts): filhos antes
+    // dos lookups que eles referenciam.
+    await prisma.stockBalance.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.stockMovement.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.assetMovement.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.assetUnit.updateMany({ where: { companyId: { in: companyIds } }, data: { currentCustodyId: null } });
+    await prisma.assetCustody.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.assetUnit.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.asset.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.assetCategory.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.assetStatus.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.assetCondition.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.location.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.locationType.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.movementType.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.employee.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.userRole.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.user.deleteMany({ where: { companyId: { in: companyIds } } });
