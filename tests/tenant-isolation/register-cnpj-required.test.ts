@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import { prisma } from "@/tests/helpers/db";
-import { formatCnpj, normalizeCnpj, withValidCheckDigits } from "@/lib/cnpj";
+import { formatCnpj, withValidCheckDigits } from "@/lib/cnpj";
 
 // Sprint Comercial SST 1.4, §7/§20 — CNPJ obrigatório no cadastro público,
 // nunca cria uma segunda Company para o mesmo CNPJ, e mensagem exata quando
@@ -11,6 +11,7 @@ import { formatCnpj, normalizeCnpj, withValidCheckDigits } from "@/lib/cnpj";
 
 const createdCompanyIds: string[] = [];
 const createdUserEmails: string[] = [];
+const createdProviderIds: string[] = [];
 let seq = 0;
 
 function uniqueTestCnpj(): string {
@@ -30,6 +31,8 @@ afterAll(async () => {
     await prisma.user.deleteMany({ where: { id: { in: userIds } } });
   }
   if (createdCompanyIds.length > 0) {
+    await prisma.sstProviderCompany.deleteMany({ where: { companyId: { in: createdCompanyIds } } });
+    await prisma.auditLog.deleteMany({ where: { companyId: { in: createdCompanyIds } } });
     await prisma.role.deleteMany({ where: { companyId: { in: createdCompanyIds } } });
     await prisma.assetStatus.deleteMany({ where: { companyId: { in: createdCompanyIds } } });
     await prisma.assetCondition.deleteMany({ where: { companyId: { in: createdCompanyIds } } });
@@ -37,6 +40,9 @@ afterAll(async () => {
     await prisma.locationType.deleteMany({ where: { companyId: { in: createdCompanyIds } } });
     await prisma.movementType.deleteMany({ where: { companyId: { in: createdCompanyIds } } });
     await prisma.company.deleteMany({ where: { id: { in: createdCompanyIds } } });
+  }
+  if (createdProviderIds.length > 0) {
+    await prisma.sstProvider.deleteMany({ where: { id: { in: createdProviderIds } } });
   }
   await prisma.$disconnect();
 });
@@ -170,9 +176,14 @@ describe("POST /api/register — CNPJ obrigatório (Sprint Comercial SST 1.4)", 
     expect(companiesAfter).toBe(1);
   });
 
-  it("mensagem exata quando o CNPJ já pertence a uma empresa UNCLAIMED (pré-cadastro de consultoria)", async () => {
+  it("CNPJ de empresa UNCLAIMED com vínculo provisório -> reivindica (200), fica CLAIM_PENDING, nunca duplica a Company", async () => {
     const route = await import("@/app/api/register/route");
     const cnpj = uniqueTestCnpj();
+
+    const provider = await prisma.sstProvider.create({
+      data: { name: "__tenant_test__ Consultoria Reivindicacao", active: true },
+    });
+    createdProviderIds.push(provider.id);
 
     const preRegistered = await prisma.company.create({
       data: {
@@ -183,14 +194,82 @@ describe("POST /api/register — CNPJ obrigatório (Sprint Comercial SST 1.4)", 
         documentNormalized: cnpj,
         controlStatus: "UNCLAIMED",
         origin: "SST_PROVIDER",
+        createdByProviderId: provider.id,
       },
     });
     createdCompanyIds.push(preRegistered.id);
+    await prisma.sstProviderCompany.create({
+      data: {
+        providerId: provider.id,
+        companyId: preRegistered.id,
+        status: "ACTIVE",
+        accessLevel: "ADMINISTRATION",
+        authorizationBasis: "PROVIDER_PRE_REGISTRATION",
+      },
+    });
 
     const email = `__tenant_test__cnpj-unclaimed-${Date.now()}@example.test`;
+    createdUserEmails.push(email);
     const res = await route.POST(
       registerRequest({
         companyName: "__tenant_test__ Tentativa Sobre Empresa Precadastrada",
+        cnpj: formatCnpj(cnpj),
+        name: "Admin Reivindicante",
+        email,
+        password: "RegisterTest@12345",
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; claimPending: boolean };
+    expect(body.claimPending).toBe(true);
+
+    // Nunca cria uma segunda Company — o usuário é criado sobre a MESMA empresa.
+    const companiesWithCnpj = await prisma.company.count({ where: { documentNormalized: cnpj } });
+    expect(companiesWithCnpj).toBe(1);
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+    expect(user.companyId).toBe(preRegistered.id);
+
+    const membership = await prisma.companyMembership.findUnique({
+      where: { userId_companyId: { userId: user.id, companyId: preRegistered.id } },
+    });
+    expect(membership?.status).toBe("ACTIVE");
+
+    const company = await prisma.company.findUniqueOrThrow({ where: { id: preRegistered.id } });
+    expect(company.controlStatus).toBe("CLAIM_PENDING");
+    expect(company.claimedAt).toBeNull();
+    // O nome pré-cadastrado pela consultoria nunca é sobrescrito pelo nome
+    // informado no formulário de registro.
+    expect(company.name).toBe("__tenant_test__ Empresa Pre-cadastrada");
+
+    const link = await prisma.sstProviderCompany.findUniqueOrThrow({
+      where: { providerId_companyId: { providerId: provider.id, companyId: preRegistered.id } },
+    });
+    expect(link.status).toBe("ACTIVE");
+    expect(link.authorizationBasis).toBe("PROVIDER_PRE_REGISTRATION");
+    expect(link.companyReviewedAt).toBeNull(); // ainda não decidido
+  });
+
+  it("nunca cria uma segunda empresa para o mesmo CNPJ (empresa CLAIM_PENDING/CLAIMED por outra reivindicação)", async () => {
+    const route = await import("@/app/api/register/route");
+    const cnpj = uniqueTestCnpj();
+
+    const claimPendingCompany = await prisma.company.create({
+      data: {
+        name: "__tenant_test__ Empresa Ja Reivindicando",
+        document: formatCnpj(cnpj),
+        documentType: "CNPJ",
+        documentOriginal: formatCnpj(cnpj),
+        documentNormalized: cnpj,
+        controlStatus: "CLAIM_PENDING",
+      },
+    });
+    createdCompanyIds.push(claimPendingCompany.id);
+
+    const email = `__tenant_test__cnpj-claimpending-${Date.now()}@example.test`;
+    const res = await route.POST(
+      registerRequest({
+        companyName: "__tenant_test__ Segunda Tentativa",
         cnpj: formatCnpj(cnpj),
         name: "Admin",
         email,
@@ -199,14 +278,15 @@ describe("POST /api/register — CNPJ obrigatório (Sprint Comercial SST 1.4)", 
     );
     expect(res.status).toBe(409);
     const body = (await res.json()) as { error: string };
-    expect(body.error).toBe(
-      "Esta empresa já possui um pré-cadastro. O acesso empresarial deverá ser solicitado pelo fluxo de reivindicação.",
-    );
+    expect(body.error).toBe("Já existe uma empresa cadastrada com este CNPJ.");
     const exists = await prisma.user.findUnique({ where: { email } });
     expect(exists).toBeNull();
 
     // Nunca revela dados internos da empresa encontrada (nome, id, etc.).
-    expect(JSON.stringify(body)).not.toContain(preRegistered.id);
-    expect(JSON.stringify(body)).not.toContain("Pre-cadastrada");
+    expect(JSON.stringify(body)).not.toContain(claimPendingCompany.id);
+    expect(JSON.stringify(body)).not.toContain("Ja Reivindicando");
+
+    const companiesAfter = await prisma.company.count({ where: { documentNormalized: cnpj } });
+    expect(companiesAfter).toBe(1);
   });
 });

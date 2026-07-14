@@ -141,6 +141,95 @@ async function ensureProviderCompanyLink(providerId: string, companyId: string, 
   });
 }
 
+// --- Cenários de estado do relacionamento (Sprint Comercial SST 1.4, §25) —
+// além dos 5 cenários de conformidade acima, o seed também precisa
+// demonstrar os estados do vínculo em si: empresa UNCLAIMED criada pela
+// consultoria (acesso provisório), solicitação PENDING, e vínculo encerrado
+// (REJECTED). Idempotentes pelo mesmo padrão (nome único, upsert por
+// providerId+companyId) — nunca duplicam ao rodar de novo.
+
+async function ensureUnclaimedCompany(name: string, document: string, providerId: string) {
+  const existing = await prisma.company.findFirst({ where: { name } });
+  if (existing) return existing;
+  return prisma.company.create({
+    data: {
+      name,
+      document,
+      documentType: "CNPJ",
+      documentOriginal: document,
+      documentNormalized: normalizeCnpj(document),
+      controlStatus: "UNCLAIMED",
+      origin: "SST_PROVIDER",
+      createdByProviderId: providerId,
+    },
+  });
+}
+
+async function ensureProviderCompanyLinkWithState(
+  providerId: string,
+  companyId: string,
+  state: {
+    status: "PENDING" | "ACTIVE" | "SUSPENDED" | "REVOKED" | "REJECTED";
+    accessLevel: "VIEW" | "OPERATION" | "ADMINISTRATION";
+    authorizationBasis: "COMPANY_APPROVAL" | "PROVIDER_PRE_REGISTRATION";
+    approvedByUserId?: string;
+  },
+) {
+  return prisma.sstProviderCompany.upsert({
+    where: { providerId_companyId: { providerId, companyId } },
+    update: {},
+    create: {
+      providerId,
+      companyId,
+      status: state.status,
+      accessLevel: state.accessLevel,
+      authorizationBasis: state.authorizationBasis,
+      ...(state.status === "ACTIVE" ? { approvedByUserId: state.approvedByUserId, approvedAt: new Date() } : {}),
+      ...(state.status === "REVOKED" ? { revokedAt: new Date() } : {}),
+    },
+  });
+}
+
+/** Empresa pré-cadastrada pela própria consultoria (Cenário A) — nunca
+ * reivindicada, acesso ACTIVE só por PROVIDER_PRE_REGISTRATION (provisório,
+ * nunca propriedade — ver lib/sst-company-provisioning.ts). */
+async function seedUnclaimedProvisionalCompany(providerId: string) {
+  const document = fictionalCnpj("000000000014");
+  const company = await ensureUnclaimedCompany("Loja Modelo Zeta (Demo SST)", document, providerId);
+  await ensureProviderCompanyLinkWithState(providerId, company.id, {
+    status: "ACTIVE",
+    accessLevel: "ADMINISTRATION",
+    authorizationBasis: "PROVIDER_PRE_REGISTRATION",
+  });
+  return company;
+}
+
+/** Empresa já CLAIMED (independente) com uma solicitação PENDING da
+ * consultoria demo — ilustra "Solicitações de acesso" no Portal Empresa. */
+async function seedPendingRequestCompany(providerId: string) {
+  const document = fictionalCnpj("000000000015");
+  const company = await ensureCompany("Distribuidora Exemplo Eta (Demo SST)", document);
+  await ensureProviderCompanyLinkWithState(providerId, company.id, {
+    status: "PENDING",
+    accessLevel: "OPERATION",
+    authorizationBasis: "COMPANY_APPROVAL",
+  });
+  return company;
+}
+
+/** Empresa já CLAIMED com um vínculo REJECTED da consultoria demo — ilustra
+ * o estado terminal "revisão necessária" (nunca reativado automaticamente). */
+async function seedRejectedLinkCompany(providerId: string) {
+  const document = fictionalCnpj("000000000016");
+  const company = await ensureCompany("Comercial Exemplo Theta (Demo SST)", document);
+  await ensureProviderCompanyLinkWithState(providerId, company.id, {
+    status: "REJECTED",
+    accessLevel: "OPERATION",
+    authorizationBasis: "COMPANY_APPROVAL",
+  });
+  return company;
+}
+
 async function ensureDepartment(companyId: string, name: string) {
   return prisma.department.upsert({
     where: { companyId_name: { companyId, name } },
@@ -546,6 +635,9 @@ export async function seedSstDemo() {
   await seedExpiringSoonCompany(provider.id, ownerUser.id);
   await seedFutureClassCompany(provider.id, ownerUser.id);
   await seedMixedPendencyCompany(provider.id, ownerUser.id);
+  await seedUnclaimedProvisionalCompany(provider.id);
+  await seedPendingRequestCompany(provider.id);
+  await seedRejectedLinkCompany(provider.id);
 
   console.log("Concluído. Contas de demonstração (Portal Consultoria):");
   console.log(`  OWNER:      ${OWNER_EMAIL} / ${DEMO_PASSWORD}`);

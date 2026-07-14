@@ -25,6 +25,8 @@ import {
   type QuickActionKey,
 } from "@/lib/dashboard";
 import { getCachedDashboardAlertsSummary } from "@/lib/cache";
+import { countPendingProviderRequests } from "@/lib/sst-providers";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -254,14 +256,19 @@ async function RecentMovementsSection({ companyId }: { companyId: string }) {
 export default async function DashboardPage() {
   const { companyId } = await requireCompanyOrDeny();
   const company = await getCurrentCompany(companyId);
-  const [canViewAlerts, canManageAsset, canManageCustody, canManageStock, canManageEmployee] =
+  const [canViewAlerts, canManageAsset, canManageCustody, canManageStock, canManageEmployee, canManageSstProvider] =
     await Promise.all([
       hasPermission(PERMISSIONS.ALERT_VIEW),
       hasPermission(PERMISSIONS.ASSET_MANAGE),
       hasPermission(PERMISSIONS.CUSTODY_MANAGE),
       hasPermission(PERMISSIONS.STOCK_MANAGE),
       hasPermission(PERMISSIONS.EMPLOYEE_MANAGE),
+      hasPermission(PERMISSIONS.SST_PROVIDER_MANAGE),
     ]);
+  // Sprint Comercial SST 1.4, §14 — aviso discreto (não é um sistema de
+  // notificação novo, só uma contagem) quando existe solicitação de acesso
+  // SST aguardando análise; só quem pode agir sobre ela vê o aviso.
+  const pendingProviderRequests = canManageSstProvider ? await countPendingProviderRequests(companyId) : 0;
 
   // Só os 2 cards rápidos (aggregate/count) bloqueiam a renderização inicial
   // — alertas e movimentações recentes streamam depois, em paralelo, cada
@@ -336,6 +343,22 @@ export default async function DashboardPage() {
           </div>
         ) : null}
       </div>
+
+      {pendingProviderRequests > 0 ? (
+        <Alert>
+          <AlertTitle>Nova solicitação de acesso SST</AlertTitle>
+          <AlertDescription>
+            <p>
+              {pendingProviderRequests === 1
+                ? "Uma consultoria solicitou autorização para operar informações de SST da sua empresa."
+                : `${pendingProviderRequests} consultorias solicitaram autorização para operar informações de SST da sua empresa.`}
+            </p>
+            <Button size="sm" className="mt-2" render={<Link href="/configuracoes/sst-providers" />}>
+              Analisar solicitação
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <SummaryCardShell

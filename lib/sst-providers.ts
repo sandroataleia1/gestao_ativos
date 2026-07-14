@@ -20,6 +20,13 @@ export async function getProviderLinksForCompany(companyId: string) {
   });
 }
 
+/** Contagem de solicitações PENDING desta empresa — usado no badge da
+ * página de prestadores e no aviso discreto do dashboard (Sprint Comercial
+ * SST 1.4, §14). */
+export async function countPendingProviderRequests(companyId: string) {
+  return prisma.sstProviderCompany.count({ where: { companyId, status: "PENDING" } });
+}
+
 const MAX_SEARCH_RESULTS = 10;
 
 /** Busca prestadores SST já cadastrados no sistema (globais — `SstProvider`
@@ -165,9 +172,19 @@ export async function updateProviderLinkStatus(
       data: {
         status: input.status,
         ...(input.status === "ACTIVE"
-          ? { approvedByUserId: actor.id, approvedAt: new Date(), ...(input.accessLevel ? { accessLevel: input.accessLevel } : {}) }
+          ? {
+              approvedByUserId: actor.id,
+              approvedAt: new Date(),
+              authorizationBasis: "COMPANY_APPROVAL",
+              companyReviewedAt: new Date(),
+              companyReviewedByUserId: actor.id,
+              ...(input.accessLevel ? { accessLevel: input.accessLevel } : {}),
+            }
           : {}),
         ...(input.status === "REVOKED" ? { revokedAt: new Date() } : {}),
+        ...(input.status === "REJECTED"
+          ? { companyReviewedAt: new Date(), companyReviewedByUserId: actor.id }
+          : {}),
       },
       include: providerLinkInclude,
     });

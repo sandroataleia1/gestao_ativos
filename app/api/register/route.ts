@@ -9,6 +9,7 @@ import { provisionDefaultAssetStatusesAndConditions } from "@/lib/asset-lookup-p
 import { provisionDefaultStockSetup } from "@/lib/stock-setup-provisioning";
 import { isValidBrazilianMobilePhone, maskBrazilianMobilePhone } from "@/lib/phone-mask";
 import { formatCnpj, isValidCnpj, normalizeCnpj } from "@/lib/cnpj";
+import { logAudit } from "@/lib/audit";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -21,26 +22,22 @@ type RegisterBody = {
   password?: unknown;
 };
 
-// Mensagem exata definida pela Sprint Comercial SST 1.4, §7 — usada quando o
-// CNPJ informado já pertence a uma empresa pré-cadastrada (UNCLAIMED, ainda
-// sem dono real) por uma consultoria SST. Nunca cria uma segunda Company
-// nem revela nenhum dado da empresa existente; o fluxo completo de
-// reivindicação (CompanyClaim) é fora de escopo desta sprint.
-const CNPJ_UNCLAIMED_MESSAGE =
-  "Esta empresa já possui um pré-cadastro. O acesso empresarial deverá ser solicitado pelo fluxo de reivindicação.";
-// Mensagem genérica para qualquer outro caso de CNPJ já cadastrado (empresa
-// já reivindicada por outra conta, ou corrida concorrente onde não é
-// seguro/necessário diferenciar o motivo) — nunca revela dados internos da
-// empresa encontrada.
+// Mensagem genérica para CNPJ já pertencente a uma empresa CLAIMED/
+// CLAIM_PENDING/DISPUTED — nunca revela dados internos da empresa
+// encontrada (§21).
 const CNPJ_ALREADY_REGISTERED_MESSAGE = "Já existe uma empresa cadastrada com este CNPJ.";
 
 function asTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-// Registro público = "criar minha empresa": cria uma Company nova (nunca
-// reutiliza uma existente a partir de um id vindo do client) e o primeiro
-// usuário dessa empresa entra automaticamente como ADMIN.
+// Registro público = "criar minha empresa" OU "reivindicar um pré-cadastro
+// existente" (Sprint Comercial SST 1.4, §16). Nunca reutiliza uma Company a
+// partir de um id vindo do client — a única forma de "reutilizar" uma
+// Company existente é encontrá-la pelo CNPJ normalizado no servidor, e só
+// quando ela está UNCLAIMED (pré-cadastrada por uma consultoria, ainda sem
+// dono real). Empresa CLAIMED/CLAIM_PENDING/DISPUTED nunca é reutilizada —
+// devolve sempre a mesma mensagem genérica, sem revelar qual é o motivo.
 export async function POST(request: Request) {
   let body: RegisterBody;
   try {
@@ -65,7 +62,7 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  // CNPJ obrigatório desde a Sprint Comercial SST 1.4, §7 — nunca confia na
+  // CNPJ obrigatório desde a Sprint Comercial SST 1.4, §5 — nunca confia na
   // máscara/normalização já feita no client; sempre revalida e normaliza no
   // servidor antes de qualquer leitura/escrita.
   if (!isValidCnpj(cnpjInput)) {
@@ -91,35 +88,47 @@ export async function POST(request: Request) {
     );
   }
 
-  // Nunca cria uma segunda Company para o mesmo CNPJ — se já existe (por
-  // pré-cadastro de consultoria SST ou cadastro real anterior), devolve uma
-  // mensagem segura sem revelar nenhum dado interno da empresa encontrada
-  // (ver §7/§18: nunca mais informação que o necessário).
   const existingCompany = await prisma.company.findFirst({
     where: { documentType: "CNPJ", documentNormalized },
-    select: { id: true, controlStatus: true },
+    select: { id: true, name: true, controlStatus: true },
   });
-  if (existingCompany) {
-    const message =
-      existingCompany.controlStatus === "UNCLAIMED" ? CNPJ_UNCLAIMED_MESSAGE : CNPJ_ALREADY_REGISTERED_MESSAGE;
-    return NextResponse.json({ error: message }, { status: 409 });
+
+  // CLAIMED (já tem dono real), CLAIM_PENDING (outra reivindicação em
+  // andamento) ou DISPUTED — nunca reutilizado, nunca revela o motivo exato.
+  if (existingCompany && existingCompany.controlStatus !== "UNCLAIMED") {
+    return NextResponse.json({ error: CNPJ_ALREADY_REGISTERED_MESSAGE }, { status: 409 });
   }
 
-  let company;
-  try {
-    company = await prisma.company.create({
-      data: { name: companyName, phone, document: documentOriginal, documentType: "CNPJ", documentOriginal, documentNormalized },
-    });
-  } catch (error) {
-    // Cinturão de segurança contra corrida (duas requisições de registro com
-    // o mesmo CNPJ ao mesmo tempo) — a checagem acima já cobre o caso comum,
-    // isto pega só a janela entre o SELECT e o INSERT. A constraint única
-    // (documentType, documentNormalized) é a fonte final de verdade.
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      return NextResponse.json({ error: CNPJ_ALREADY_REGISTERED_MESSAGE }, { status: 409 });
+  const isClaim = Boolean(existingCompany);
+  let company: { id: string; name: string };
+  if (existingCompany) {
+    // Reivindicação (§16): NUNCA cria uma segunda Company — reaproveita a
+    // que a consultoria pré-cadastrou. O nome informado no formulário não
+    // sobrescreve o nome já registrado (evita que qualquer um que descubra
+    // o CNPJ altere dados exibidos antes mesmo de a conta existir).
+    company = existingCompany;
+  } else {
+    try {
+      company = await prisma.company.create({
+        data: { name: companyName, phone, document: documentOriginal, documentType: "CNPJ", documentOriginal, documentNormalized },
+      });
+    } catch (error) {
+      // Cinturão de segurança contra corrida (duas requisições de registro
+      // com o mesmo CNPJ ao mesmo tempo) — a checagem acima já cobre o caso
+      // comum, isto pega só a janela entre o SELECT e o INSERT. A
+      // constraint única (documentType, documentNormalized) é a fonte
+      // final de verdade.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        return NextResponse.json({ error: CNPJ_ALREADY_REGISTERED_MESSAGE }, { status: 409 });
+      }
+      throw error;
     }
-    throw error;
   }
+
+  // Uma Company pré-cadastrada pela consultoria nunca teve RBAC/lookups
+  // provisionados (só Company + SstProviderCompany são criados no
+  // pré-cadastro) — precisa acontecer agora, na primeira vez que um usuário
+  // real se cadastra sobre ela, igual ao caminho de empresa nova.
   const roles = await provisionDefaultRolesForCompany(company.id);
   await provisionDefaultAssetStatusesAndConditions(company.id);
   await provisionDefaultStockSetup(company.id);
@@ -139,20 +148,45 @@ export async function POST(request: Request) {
   }
 
   const adminRole = roles.get(SYSTEM_ROLES.ADMIN)!;
+  let claimPending = false;
   // Sprint 0.6: sem uma CompanyMembership ACTIVE aqui, o admin recém-criado
   // fica bloqueado (NO_ACTIVE_MEMBERSHIP) na primeira requisição, já que
   // CompanyMembership é a fonte real de autorização desde a Sprint 0.5 (ver
   // docs/adr/ADR-001). `status: ACTIVE`/`activatedAt: now` diretos (não
-  // INVITED) — é o próprio usuário se auto-registrando como dono da empresa
-  // que ele acabou de criar, não um convite de terceiro.
-  await prisma.$transaction([
-    prisma.userRole.create({
-      data: { userId, companyId: company.id, roleId: adminRole.id },
-    }),
-    prisma.companyMembership.create({
+  // INVITED) — é o próprio usuário se auto-registrando/reivindicando como
+  // dono da empresa, não um convite de terceiro.
+  await prisma.$transaction(async (tx) => {
+    await tx.userRole.create({ data: { userId, companyId: company.id, roleId: adminRole.id } });
+    await tx.companyMembership.create({
       data: { userId, companyId: company.id, status: "ACTIVE", activatedAt: new Date() },
-    }),
-  ]);
+    });
 
-  return NextResponse.json({ ok: true });
+    if (isClaim) {
+      // §16: a reivindicação nunca conclui sozinha — se existir ao menos um
+      // vínculo provisório (authorizationBasis: PROVIDER_PRE_REGISTRATION)
+      // ainda não revisado, a empresa fica CLAIM_PENDING até decidir sobre
+      // cada um (ver lib/company-claim.ts). Sem nenhum vínculo provisório
+      // pendente (caso raro), a reivindicação já finaliza como CLAIMED.
+      const unresolvedCount = await tx.sstProviderCompany.count({
+        where: { companyId: company.id, authorizationBasis: "PROVIDER_PRE_REGISTRATION", status: "ACTIVE", companyReviewedAt: null },
+      });
+      claimPending = unresolvedCount > 0;
+      await tx.company.update({
+        where: { id: company.id },
+        data: claimPending ? { controlStatus: "CLAIM_PENDING" } : { controlStatus: "CLAIMED", claimedAt: new Date() },
+      });
+      await logAudit(tx, {
+        companyId: company.id,
+        actorUserId: userId,
+        actorName: name,
+        action: "company.claim_started",
+        targetType: "Company",
+        targetId: company.id,
+        targetLabel: company.name,
+        metadata: { claimPending },
+      });
+    }
+  });
+
+  return NextResponse.json({ ok: true, claimPending });
 }

@@ -118,7 +118,7 @@ describe("Permissão — só OWNER inicia pré-cadastro/solicitação (§9)", ()
 });
 
 describe("POST /api/sst/companies/check-cnpj (§10 fase 1, §18)", () => {
-  it("CNPJ inexistente -> AVAILABLE", async () => {
+  it("CNPJ inexistente -> AVAILABLE_FOR_PRE_REGISTRATION", async () => {
     const provider = await makeProvider("check-avail");
     const owner = await makeProviderUser(provider.id, "check-avail-u", "OWNER");
     loginAs(owner);
@@ -126,7 +126,7 @@ describe("POST /api/sst/companies/check-cnpj (§10 fase 1, §18)", () => {
     const res = await checkRoute.POST(checkRequest({ cnpj: uniqueCnpj() }));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { status: string };
-    expect(body.status).toBe("AVAILABLE");
+    expect(body.status).toBe("AVAILABLE_FOR_PRE_REGISTRATION");
   });
 
   it("rejeita CNPJ inválido", async () => {
@@ -237,7 +237,7 @@ describe("POST /api/sst/companies/pre-register (§11)", () => {
     expect(link.accessLevel).toBe("ADMINISTRATION");
   });
 
-  it("nunca cria uma segunda empresa para o mesmo CNPJ (mesma consultoria repetindo -> ALREADY_AUTHORIZED, 200)", async () => {
+  it("nunca cria uma segunda empresa para o mesmo CNPJ (mesma consultoria repetindo -> ALREADY_PROVISIONALLY_AUTHORIZED, 200)", async () => {
     const provider = await makeProvider("prereg-dup");
     const owner = await makeProviderUser(provider.id, "prereg-dup-u", "OWNER");
     loginAs(owner);
@@ -252,7 +252,9 @@ describe("POST /api/sst/companies/pre-register (§11)", () => {
     expect(res2.status).toBe(200);
     const body2 = (await res2.json()) as { created: boolean; reason: string };
     expect(body2.created).toBe(false);
-    expect(body2.reason).toBe("ALREADY_AUTHORIZED");
+    // Cenário C: a mesma consultoria que pré-cadastrou já tem ACTIVE só por
+    // PROVIDER_PRE_REGISTRATION — provisório, nunca ALREADY_AUTHORIZED puro.
+    expect(body2.reason).toBe("ALREADY_PROVISIONALLY_AUTHORIZED");
 
     const count = await prisma.company.count({ where: { documentNormalized: cnpj } });
     expect(count).toBe(1);

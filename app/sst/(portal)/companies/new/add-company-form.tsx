@@ -18,7 +18,15 @@ import { isValidCnpj, maskCnpjInput } from "@/lib/cnpj";
 
 type CheckResult =
   | { status: "ALREADY_AUTHORIZED"; companyId: string; companyName: string }
-  | { status: "AVAILABLE" | "AUTHORIZATION_REQUIRED" | "AUTHORIZATION_PENDING" | "RELATIONSHIP_REVIEW_REQUIRED" | "COMPANY_UNAVAILABLE" };
+  | { status: "ALREADY_PROVISIONALLY_AUTHORIZED"; companyId: string; companyName: string }
+  | {
+      status:
+        | "AVAILABLE_FOR_PRE_REGISTRATION"
+        | "AUTHORIZATION_REQUIRED"
+        | "AUTHORIZATION_PENDING"
+        | "RELATIONSHIP_REVIEW_REQUIRED"
+        | "COMPANY_UNAVAILABLE";
+    };
 
 async function parseErrorMessage(response: Response) {
   const data = await response.json().catch(() => null);
@@ -88,10 +96,12 @@ export function AddCompanyForm() {
         return;
       }
       if (data.created) {
-        setSuccessMessage(`Empresa "${data.company.name}" pré-cadastrada com sucesso.`);
+        setSuccessMessage(`Empresa "${data.company.name}" pré-cadastrada com sucesso. Acesso provisório concedido.`);
         setNewCompanyId(data.company.id as string);
+      } else if (data.reason === "ALREADY_PROVISIONALLY_AUTHORIZED" || data.reason === "ALREADY_AUTHORIZED") {
+        setSuccessMessage("Sua consultoria já possui acesso a esta empresa.");
       } else {
-        setSuccessMessage("Sua consultoria já possui autorização para esta empresa.");
+        setSuccessMessage("Solicitação enviada — aguardando autorização da empresa.");
       }
     } catch {
       setActionError("Não foi possível pré-cadastrar a empresa. Tente novamente.");
@@ -115,8 +125,8 @@ export function AddCompanyForm() {
         return;
       }
       setSuccessMessage(
-        data.status === "ALREADY_AUTHORIZED"
-          ? "Sua consultoria já possui autorização para esta empresa."
+        data.status === "ALREADY_AUTHORIZED" || data.status === "ALREADY_PROVISIONALLY_AUTHORIZED"
+          ? "Sua consultoria já possui acesso a esta empresa."
           : "Solicitação enviada — aguardando autorização da empresa.",
       );
     } catch {
@@ -158,11 +168,18 @@ export function AddCompanyForm() {
                 />
               </div>
               {result ? (
-                <Button type="button" variant="outline" onClick={resetToStepOne} disabled={isSubmitting}>
+                // `key` explícita — sem isso, o React reaproveita o mesmo nó
+                // do DOM deste botão e do "Verificar" abaixo (mesma posição
+                // na árvore), só trocando o atributo `type`. Como essa troca
+                // acontece de forma síncrona durante o clique, o navegador
+                // processa o "comportamento de ativação" do clique já vendo
+                // type="submit" e envia o formulário sem querer — bug real
+                // encontrado na validação manual desta sprint.
+                <Button key="trocar" type="button" variant="outline" onClick={resetToStepOne} disabled={isSubmitting}>
                   Trocar CNPJ
                 </Button>
               ) : (
-                <Button type="submit" disabled={isChecking}>
+                <Button key="verificar" type="submit" disabled={isChecking}>
                   {isChecking ? <Loader2Icon className="animate-spin" /> : null}
                   Verificar
                 </Button>
@@ -237,15 +254,17 @@ function ResultPanel({
   }
 
   switch (result.status) {
-    case "AVAILABLE":
+    case "AVAILABLE_FOR_PRE_REGISTRATION":
       return (
         <Card>
           <CardContent className="grid gap-4 pt-6">
-            <p className="text-sm text-muted-foreground">
-              CNPJ disponível. Informe o nome da empresa para pré-cadastrá-la — sua consultoria
-              assume administração imediata sobre turmas, colaboradores e treinamentos até a
-              empresa fazer seu próprio cadastro.
-            </p>
+            <div>
+              <p className="font-medium">Empresa ainda não cadastrada</p>
+              <p className="text-sm text-muted-foreground">
+                Você poderá criar um pré-cadastro e iniciar a operação provisória dos dados de SST
+                desta empresa.
+              </p>
+            </div>
             <div className="grid gap-2">
               <Label htmlFor="company-name">Nome da empresa</Label>
               <Input
@@ -260,6 +279,10 @@ function ResultPanel({
               {isSubmitting ? <Loader2Icon className="animate-spin" /> : null}
               Pré-cadastrar empresa
             </Button>
+            <p className="text-xs text-muted-foreground">
+              Os dados continuarão pertencendo à empresa. Quando ela assumir o cadastro, poderá
+              manter, suspender ou bloquear o acesso da consultoria.
+            </p>
           </CardContent>
         </Card>
       );
@@ -269,8 +292,9 @@ function ResultPanel({
         <Card>
           <CardContent className="grid gap-3 pt-6">
             <p className="text-sm text-muted-foreground">
-              Esta empresa já está cadastrada na plataforma. Para operar seus dados de SST,
-              solicite autorização.
+              Esta empresa já está cadastrada na plataforma.
+              <br />
+              Para operar os dados de SST, solicite autorização.
             </p>
             <Button onClick={onRequestAccess} disabled={isSubmitting}>
               {isSubmitting ? <Loader2Icon className="animate-spin" /> : null}
@@ -284,8 +308,19 @@ function ResultPanel({
       return (
         <Card>
           <CardContent className="grid gap-3 pt-6">
+            <p className="text-sm text-muted-foreground">Sua consultoria já possui acesso autorizado.</p>
+            <Button render={<Link href={`/sst/companies/${result.companyId}`} />}>Abrir empresa</Button>
+          </CardContent>
+        </Card>
+      );
+
+    case "ALREADY_PROVISIONALLY_AUTHORIZED":
+      return (
+        <Card>
+          <CardContent className="grid gap-3 pt-6">
             <p className="text-sm text-muted-foreground">
-              Sua consultoria já possui autorização para esta empresa.
+              Sua consultoria possui acesso provisório para operação dos dados de SST desta
+              empresa (pré-cadastro ainda não reivindicado).
             </p>
             <Button render={<Link href={`/sst/companies/${result.companyId}`} />}>Abrir empresa</Button>
           </CardContent>
@@ -296,7 +331,7 @@ function ResultPanel({
       return (
         <Alert>
           <AlertCircleIcon />
-          <AlertDescription>Solicitação aguardando autorização da empresa.</AlertDescription>
+          <AlertDescription>Solicitação aguardando análise da empresa.</AlertDescription>
         </Alert>
       );
 

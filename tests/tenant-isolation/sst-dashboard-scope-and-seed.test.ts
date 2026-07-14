@@ -102,6 +102,14 @@ describe("Sprint Demo Comercial SST 1.0, Parte 13 — idempotência do seed de d
   async function cleanupSeedFixtures() {
     const provider = await prisma.sstProvider.findFirst({ where: { name: DEMO_PROVIDER_NAME } });
     if (provider) {
+      // Sprint Comercial SST 1.4 (extensão) — o seed agora inclui uma
+      // empresa UNCLAIMED pré-cadastrada por este provider
+      // (Company.createdByProviderId, onDelete: Restrict) — precisa ser
+      // desvinculada antes do DELETE do provider, senão a FK bloqueia.
+      await prisma.company.updateMany({
+        where: { createdByProviderId: provider.id },
+        data: { createdByProviderId: null },
+      });
       await prisma.sstProviderUser.deleteMany({ where: { providerId: provider.id } });
       await prisma.sstProviderCompany.deleteMany({ where: { providerId: provider.id } });
       await prisma.sstProvider.deleteMany({ where: { id: provider.id } });
@@ -148,9 +156,12 @@ describe("Sprint Demo Comercial SST 1.0, Parte 13 — idempotência do seed de d
     await seedSstDemo();
 
     const companies = await prisma.company.findMany({ where: { name: { endsWith: DEMO_SUFFIX } } });
-    expect(companies).toHaveLength(5);
+    // 5 empresas de conformidade + 3 de estado do vínculo (Sprint Comercial
+    // SST 1.4: UNCLAIMED provisória, PENDING, REJECTED — ver
+    // prisma/seed-sst-demo.ts).
+    expect(companies).toHaveLength(8);
     const names = companies.map((c) => c.name).sort();
-    expect(new Set(names).size).toBe(5); // nenhum nome duplicado
+    expect(new Set(names).size).toBe(8); // nenhum nome duplicado
 
     const provider = await prisma.sstProvider.findFirstOrThrow({ where: { name: DEMO_PROVIDER_NAME } });
     const providerUsers = await prisma.sstProviderUser.findMany({ where: { providerId: provider.id } });
@@ -192,7 +203,7 @@ describe("Sprint Demo Comercial SST 1.0, Parte 13 — idempotência do seed de d
     await linkProviderToCompany({ providerId: provider.id, companyId: controlCompany.id, status: "ACTIVE" });
 
     const before = await prisma.company.count({ where: { name: { endsWith: DEMO_SUFFIX } } });
-    expect(before).toBe(5);
+    expect(before).toBe(8);
 
     await resetSstDemo();
 

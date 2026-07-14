@@ -27,6 +27,8 @@ function loginAs(user: TestSessionUser | null) {
 }
 
 let linkRoute: typeof import("@/app/api/sst-providers/[id]/route");
+let approveRoute: typeof import("@/app/api/sst-providers/requests/[relationshipId]/approve/route");
+let rejectRoute: typeof import("@/app/api/sst-providers/requests/[relationshipId]/reject/route");
 
 const companyIds: string[] = [];
 const providerIds: string[] = [];
@@ -38,6 +40,8 @@ let consultaA: TestSessionUser;
 
 beforeAll(async () => {
   linkRoute = await import("@/app/api/sst-providers/[id]/route");
+  approveRoute = await import("@/app/api/sst-providers/requests/[relationshipId]/approve/route");
+  rejectRoute = await import("@/app/api/sst-providers/requests/[relationshipId]/reject/route");
 
   companyA = await createTestCompanyWithRoles("provapprove-a");
   companyB = await createTestCompanyWithRoles("provapprove-b");
@@ -163,5 +167,75 @@ describe("PATCH /api/sst-providers/[id] — recusar (REJECTED, §14/§15)", () =
 
     const unchanged = await prisma.sstProviderCompany.findUniqueOrThrow({ where: { id: link.id } });
     expect(unchanged.status).toBe("PENDING");
+  });
+});
+
+describe("POST /api/sst-providers/requests/[relationshipId]/{approve,reject} — contrato dedicado (§15)", () => {
+  function requestUrl(relationshipId: string, action: "approve" | "reject") {
+    return new NextRequest(`http://localhost/api/sst-providers/requests/${relationshipId}/${action}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+  }
+
+  it("aprova via endpoint dedicado -> ACTIVE, authorizationBasis COMPANY_APPROVAL, companyReviewedAt/By preenchidos", async () => {
+    const { link } = await makePendingLink(companyA.id, "dedicated-approve");
+    loginAs(adminA);
+
+    const res = await approveRoute.POST(requestUrl(link.id, "approve"), { params: Promise.resolve({ relationshipId: link.id }) });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { providerLink: { status: string } };
+    expect(body.providerLink.status).toBe("ACTIVE");
+
+    const updated = await prisma.sstProviderCompany.findUniqueOrThrow({ where: { id: link.id } });
+    expect(updated.authorizationBasis).toBe("COMPANY_APPROVAL");
+    expect(updated.companyReviewedAt).not.toBeNull();
+    expect(updated.companyReviewedByUserId).toBe(adminA.id);
+  });
+
+  it("aprova via endpoint dedicado com accessLevel escolhido", async () => {
+    const { link } = await makePendingLink(companyA.id, "dedicated-approve-level");
+    loginAs(adminA);
+
+    const req = new NextRequest(`http://localhost/api/sst-providers/requests/${link.id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accessLevel: "ADMINISTRATION" }),
+    });
+    const res = await approveRoute.POST(req, { params: Promise.resolve({ relationshipId: link.id }) });
+    expect(res.status).toBe(200);
+    const updated = await prisma.sstProviderCompany.findUniqueOrThrow({ where: { id: link.id } });
+    expect(updated.accessLevel).toBe("ADMINISTRATION");
+  });
+
+  it("recusa via endpoint dedicado -> REJECTED, companyReviewedAt/By preenchidos", async () => {
+    const { link } = await makePendingLink(companyA.id, "dedicated-reject");
+    loginAs(adminA);
+
+    const res = await rejectRoute.POST(requestUrl(link.id, "reject"), { params: Promise.resolve({ relationshipId: link.id }) });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { providerLink: { status: string } };
+    expect(body.providerLink.status).toBe("REJECTED");
+
+    const updated = await prisma.sstProviderCompany.findUniqueOrThrow({ where: { id: link.id } });
+    expect(updated.companyReviewedAt).not.toBeNull();
+    expect(updated.companyReviewedByUserId).toBe(adminA.id);
+  });
+
+  it("endpoints dedicados também respeitam ownership (404 para vínculo de outra empresa)", async () => {
+    const { link } = await makePendingLink(companyB.id, "dedicated-cross");
+    loginAs(adminA);
+
+    const res = await approveRoute.POST(requestUrl(link.id, "approve"), { params: Promise.resolve({ relationshipId: link.id }) });
+    expect(res.status).toBe(404);
+  });
+
+  it("endpoints dedicados exigem sst_provider:manage (403 para CONSULTA)", async () => {
+    const { link } = await makePendingLink(companyA.id, "dedicated-forbidden");
+    loginAs(consultaA);
+
+    const res = await rejectRoute.POST(requestUrl(link.id, "reject"), { params: Promise.resolve({ relationshipId: link.id }) });
+    expect(res.status).toBe(403);
   });
 });

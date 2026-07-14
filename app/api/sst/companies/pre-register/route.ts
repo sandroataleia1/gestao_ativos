@@ -21,10 +21,12 @@ export async function POST(request: Request) {
 
     if (result.created) return NextResponse.json(result, { status: 201 });
     // Outra requisição já criou a empresa para este CNPJ (corrida ou
-    // duplicata) — nunca uma segunda Company. ALREADY_AUTHORIZED (a própria
-    // consultoria já é dona) é informativo (200); os demais indicam que um
+    // duplicata) — nunca uma segunda Company. ALREADY_AUTHORIZED/
+    // ALREADY_PROVISIONALLY_AUTHORIZED (a própria consultoria já tem acesso,
+    // real ou provisório) é informativo (200); os demais indicam que um
     // pedido PENDING foi registrado no lugar da administração imediata (409).
-    return NextResponse.json(result, { status: result.reason === "ALREADY_AUTHORIZED" ? 200 : 409 });
+    const alreadyHasAccess = result.reason === "ALREADY_AUTHORIZED" || result.reason === "ALREADY_PROVISIONALLY_AUTHORIZED";
+    return NextResponse.json(result, { status: alreadyHasAccess ? 200 : 409 });
   } catch (error) {
     return handleApiError(error);
   }

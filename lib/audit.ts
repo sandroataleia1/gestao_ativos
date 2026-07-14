@@ -55,7 +55,11 @@ export type AuditAction =
   | "sst_company.pre_register"
   | "sst_company.pre_register_race_recovered"
   | "sst_company.request_access"
-  | "sst_company.request_access_denied";
+  | "sst_company.request_access_denied"
+  | "sst_provider.claim_continue"
+  | "sst_provider.claim_block"
+  | "company.claim_started"
+  | "company.claim_finalized";
 
 /**
  * Registra uma ação administrativa/de negócio crítica. Sempre chamado

@@ -246,7 +246,10 @@ model User {
   auditLogsAsActor AuditLog[] @relation("AuditLogActor")
   // `SetNull` — mesma lógica de auditLogsAsActor: excluir o usuário que
   // aprovou um vínculo não pode ficar bloqueado por isso.
-  sstProviderCompanyApprovals SstProviderCompany[]
+  sstProviderCompanyApprovals SstProviderCompany[] @relation("SstProviderCompanyApprovedBy")
+  // Revisões de vínculo pelo lado da empresa (aprovação comum ou decisão de
+  // reivindicação) — ver SstProviderCompany.companyReviewedByUserId.
+  sstProviderCompanyReviews   SstProviderCompany[] @relation("SstProviderCompanyReviewedBy")
   sstProviderUsers SstProviderUser[]
   companyMemberships          CompanyMembership[] @relation("CompanyMembershipUser")
   invitedCompanyMemberships   CompanyMembership[] @relation("CompanyMembershipInviter")
@@ -1347,6 +1350,21 @@ enum SstProviderCompanyAccessLevel {
   ADMINISTRATION
 }
 
+// Distingue COMO um vínculo passou a existir/ficar ACTIVE — não confundir
+// com `status` (o estado atual). Sprint Comercial SST 1.4 (extensão):
+// PROVIDER_PRE_REGISTRATION é sempre provisório (a consultoria criou o
+// primeiro pré-cadastro da empresa, `Company.controlStatus: UNCLAIMED`) —
+// nunca propriedade, só acesso operacional aos módulos SST enquanto a
+// empresa não reivindica o cadastro. COMPANY_APPROVAL é a aprovação real,
+// feita por um usuário autenticado da própria empresa (via Portal Empresa
+// ou pela decisão de reivindicação). SUPER_ADMIN é preparação para um
+// futuro painel administrativo — não implementado nesta sprint.
+enum SstProviderAuthorizationBasis {
+  COMPANY_APPROVAL
+  PROVIDER_PRE_REGISTRATION
+  SUPER_ADMIN
+}
+
 // O vínculo em si — é aqui que mora o isolamento multi-tenant real: toda
 // query do lado da empresa filtra por companyId nesta tabela, nunca em
 // SstProvider direto. Só um vínculo ACTIVE com accessLevel OPERATION ou
@@ -1363,9 +1381,20 @@ model SstProviderCompany {
   startsAt         DateTime                       @default(now())
   endsAt           DateTime?
   approvedByUserId String?
-  approvedByUser   User?                          @relation(fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  approvedByUser   User?                          @relation("SstProviderCompanyApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
   approvedAt       DateTime?
   revokedAt        DateTime?
+  // Origem da autorização (Sprint Comercial SST 1.4, extensão — nunca
+  // confundir com `status`) e o registro de quando/quem, do lado da
+  // empresa, revisou este vínculo — preenchido tanto pela aprovação comum
+  // (Portal Empresa) quanto pela decisão de reivindicação ("continuar
+  // autorizando"/"bloquear"). Fica NULL enquanto o vínculo nunca foi
+  // revisado por um humano da empresa (ex.: ainda PENDING, ou ACTIVE só por
+  // PROVIDER_PRE_REGISTRATION).
+  authorizationBasis      SstProviderAuthorizationBasis @default(COMPANY_APPROVAL)
+  companyReviewedAt       DateTime?
+  companyReviewedByUserId String?
+  companyReviewedByUser   User?                         @relation("SstProviderCompanyReviewedBy", fields: [companyReviewedByUserId], references: [id], onDelete: SetNull)
   createdAt        DateTime                       @default(now())
   updatedAt        DateTime                       @updatedAt
 

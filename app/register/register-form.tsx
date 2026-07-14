@@ -157,7 +157,11 @@ export function RegisterForm() {
       return;
     }
 
-    router.push("/dashboard");
+    // Reivindicação de um CNPJ pré-cadastrado por uma consultoria SST
+    // (Sprint Comercial SST 1.4, §16) — a empresa precisa decidir sobre
+    // cada vínculo provisório antes de acessar o resto do sistema.
+    const data = (await response.json().catch(() => null)) as { claimPending?: boolean } | null;
+    router.push(data?.claimPending ? "/onboarding/sst-providers" : "/dashboard");
     router.refresh();
   }
 

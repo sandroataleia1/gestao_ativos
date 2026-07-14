@@ -112,11 +112,19 @@ export function SstProvidersPanel({
     if (!response.ok) throw new Error(await parseErrorMessage(response));
   }
 
+  // Aprovar/recusar usam o contrato dedicado (Sprint Comercial SST 1.4,
+  // §15) em vez do PATCH genérico — suspender/revogar continuam nele
+  // (updateStatus), que não muda de contrato nesta sprint.
   async function handleApproveConfirm(accessLevel: ProviderAccessLevel) {
     if (!approveTarget) return;
     setIsWorking(true);
     try {
-      await updateStatus(approveTarget.id, "ACTIVE", accessLevel);
+      const response = await fetch(`/api/sst-providers/requests/${approveTarget.id}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accessLevel }),
+      });
+      if (!response.ok) throw new Error(await parseErrorMessage(response));
       toast.success(`${approveTarget.provider.name} autorizado.`);
       setApproveTarget(null);
       router.refresh();
@@ -131,7 +139,8 @@ export function SstProvidersPanel({
     if (!rejectTarget) return;
     setIsWorking(true);
     try {
-      await updateStatus(rejectTarget.id, "REJECTED");
+      const response = await fetch(`/api/sst-providers/requests/${rejectTarget.id}/reject`, { method: "POST" });
+      if (!response.ok) throw new Error(await parseErrorMessage(response));
       toast.success(`Solicitação de ${rejectTarget.provider.name} recusada.`);
       setRejectTarget(null);
       router.refresh();

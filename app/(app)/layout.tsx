@@ -1,3 +1,5 @@
+import { redirect } from "next/navigation";
+
 import { prisma } from "@/lib/prisma";
 import { getCurrentCompany, hasPermission, requireCompanyOrDeny } from "@/lib/auth-server";
 import { listAvailableCompanyContexts } from "@/lib/company-selection";
@@ -51,6 +53,16 @@ export default async function AppLayout({
       }),
     ),
   ]);
+
+  // Reivindicação de CNPJ pré-cadastrado (Sprint Comercial SST 1.4, §16-§19)
+  // — enquanto sobrar algum vínculo provisório sem revisão, a empresa fica
+  // CLAIM_PENDING e nenhuma página do Portal Empresa é liberada além da
+  // decisão. `resolveClaimDecision` sempre finaliza para CLAIMED assim que
+  // o último vínculo é revisado, então chegar aqui com CLAIM_PENDING
+  // implica que ainda existe decisão pendente — nunca um estado travado.
+  if (company?.controlStatus === "CLAIM_PENDING") {
+    redirect("/onboarding/sst-providers");
+  }
 
   return (
     <div className="flex h-screen overflow-hidden">
