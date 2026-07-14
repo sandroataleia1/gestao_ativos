@@ -5,6 +5,13 @@ import { SYSTEM_ROLES } from "@/lib/permissions";
 import { provisionDefaultRolesForCompany } from "@/lib/rbac-provisioning";
 import { provisionDefaultAssetStatusesAndConditions } from "@/lib/asset-lookup-provisioning";
 import { provisionDefaultStockSetup } from "@/lib/stock-setup-provisioning";
+import { formatCnpj, normalizeCnpj, withValidCheckDigits } from "@/lib/cnpj";
+
+// CNPJ fictício porém matematicamente válido (Sprint Comercial SST 1.4,
+// §19) — antes "00.000.000/0001-00", um placeholder que falhava a validação
+// de dígito verificador. Determinístico (mesma base sempre gera o mesmo
+// CNPJ) e nunca reaproveitado de nenhuma empresa real conhecida.
+const DEMO_COMPANY_CNPJ = formatCnpj(withValidCheckDigits("112223330001"));
 
 const DEMO_COMPANY_NAME = "Empresa Demo";
 const DEMO_ADMIN_EMAIL = "admin@demo.com";
@@ -27,7 +34,13 @@ async function seedCompany() {
   if (existing) return existing;
 
   return prisma.company.create({
-    data: { name: DEMO_COMPANY_NAME, document: "00.000.000/0001-00" },
+    data: {
+      name: DEMO_COMPANY_NAME,
+      document: DEMO_COMPANY_CNPJ,
+      documentType: "CNPJ",
+      documentOriginal: DEMO_COMPANY_CNPJ,
+      documentNormalized: normalizeCnpj(DEMO_COMPANY_CNPJ),
+    },
   });
 }
 

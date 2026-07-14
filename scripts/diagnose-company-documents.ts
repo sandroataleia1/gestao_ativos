@@ -1,6 +1,7 @@
 import "dotenv/config";
 
 import { prisma } from "@/lib/prisma";
+import { isValidCnpj, normalizeCnpj } from "@/lib/cnpj";
 
 /**
  * Diagnóstico SOMENTE-LEITURA do campo `Company.document` (CNPJ).
@@ -26,11 +27,8 @@ import { prisma } from "@/lib/prisma";
  */
 
 // --- Utilidades puras (sem I/O) ---------------------------------------------
-
-/** Remove tudo que não for dígito. */
-function digitsOnly(value: string): string {
-  return value.replace(/\D/g, "");
-}
+// Normalização/validação de dígito verificador reaproveitadas de
+// lib/cnpj.ts (Sprint Comercial SST 1.4) — antes duplicadas aqui.
 
 /** Caracteres de máscara "esperados" de um CNPJ formatado: . / - e espaço. */
 const MASK_CHARS = /[.\-/\s]/g;
@@ -48,35 +46,6 @@ function hasMaskChars(value: string): boolean {
 function hasUnexpectedChars(value: string): boolean {
   const stripped = value.replace(/\d/g, "").replace(MASK_CHARS, "");
   return stripped.length > 0;
-}
-
-/**
- * Validação dos dígitos verificadores de um CNPJ numérico (14 dígitos).
- * Não valida o CNPJ alfanumérico (regra nova da Receita, vigente a partir de
- * 2026) — este diagnóstico assume o formato numérico clássico e apenas
- * sinaliza divergências; não corrige nada.
- */
-function isValidCnpjCheckDigits(digits: string): boolean {
-  if (digits.length !== 14) return false;
-  // Rejeita sequências repetidas (00000000000000, 11111111111111, ...), que
-  // passam na aritmética dos DVs mas nunca são CNPJs reais.
-  if (/^(\d)\1{13}$/.test(digits)) return false;
-
-  const calcDigit = (base: string, weights: number[]): number => {
-    const sum = base
-      .split("")
-      .reduce((acc, ch, i) => acc + Number(ch) * weights[i], 0);
-    const mod = sum % 11;
-    return mod < 2 ? 0 : 11 - mod;
-  };
-
-  const firstWeights = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
-  const secondWeights = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
-
-  const dv1 = calcDigit(digits.slice(0, 12), firstWeights);
-  if (dv1 !== Number(digits[12])) return false;
-  const dv2 = calcDigit(digits.slice(0, 13), secondWeights);
-  return dv2 === Number(digits[13]);
 }
 
 // --- Tipos do relatório ------------------------------------------------------
@@ -145,10 +114,10 @@ function buildReport(companies: CompanyRow[]): Report {
     if (hasMaskChars(raw)) withMask.push(company);
     if (hasUnexpectedChars(raw)) withNonNumericChars.push(company);
 
-    const digits = digitsOnly(raw);
+    const digits = normalizeCnpj(raw);
     if (digits.length !== 14) {
       wrongDigitCount.push(company);
-    } else if (!isValidCnpjCheckDigits(digits)) {
+    } else if (!isValidCnpj(digits)) {
       invalidCheckDigits.push(company);
     }
 

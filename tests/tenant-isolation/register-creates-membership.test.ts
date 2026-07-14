@@ -1,6 +1,14 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import { prisma } from "@/tests/helpers/db";
+import { withValidCheckDigits } from "@/lib/cnpj";
+
+/** CNPJ fictício, válido e único por execução (base derivada do timestamp,
+ * truncada a 12 dígitos) — Sprint Comercial SST 1.4 tornou o CNPJ
+ * obrigatório em /api/register. */
+function uniqueTestCnpj(): string {
+  return withValidCheckDigits(Date.now().toString().slice(-12).padStart(12, "0"));
+}
 
 // Regressão descoberta durante a validação manual da Sprint 0.6 (Parte J):
 // POST /api/register nunca criava uma CompanyMembership para o admin
@@ -56,6 +64,7 @@ describe("Sprint 0.6 — regressão: POST /api/register cria CompanyMembership A
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         companyName: "__tenant_test__ Empresa Registro Automatico",
+        cnpj: uniqueTestCnpj(),
         name: "Admin Registro Automatico",
         email,
         password: "RegisterTest@12345",

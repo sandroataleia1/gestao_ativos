@@ -342,12 +342,75 @@ contagem.
   novas nesta sprint; pode ser alinhado ao padrão `sonner` do resto do app
   depois, sem mudança de contrato de API.
 
-## 15. Roadmap (Sprint Comercial 1.3+)
+## 16. Pré-cadastro de empresa (Sprint Comercial SST 1.4)
+
+Antes desta sprint, a consultoria só operava empresas que já tinham feito o
+próprio cadastro (`/register`) e depois autorizado o vínculo pelo Portal
+Empresa. Agora a consultoria também pode iniciar esse processo a partir do
+CNPJ — `/sst/companies/new`, só para `OWNER` (`requireSstRoleOrDeny("OWNER")`).
+
+**Regra central, permanente**: a empresa é sempre dona dos seus dados;
+`Company.createdByProviderId` é só proveniência (nunca concede acesso
+sozinho); todo acesso da consultoria continua sendo via `SstProviderCompany`;
+revogar uma consultoria nunca apaga dado nenhum; conhecer o CNPJ de uma
+empresa nunca dá acesso a ela; outra consultoria nunca recebe acesso
+automático a uma empresa que outra já pré-cadastrou.
+
+Fluxo (`lib/sst-company-provisioning.ts`):
+
+1. `POST /api/sst/companies/check-cnpj` — verificação somente leitura.
+   Devolve um destes status, nunca mais informação que o necessário: `AVAILABLE`
+   (CNPJ livre) · `ALREADY_AUTHORIZED` (só aqui devolve `companyId`/`companyName`
+   — a consultoria já tem acesso de qualquer forma) · `AUTHORIZATION_REQUIRED`
+   (empresa existe, sem vínculo) · `AUTHORIZATION_PENDING` · `RELATIONSHIP_REVIEW_REQUIRED`
+   (vínculo SUSPENDED/REVOKED/REJECTED — nunca reativado automaticamente) ·
+   `COMPANY_UNAVAILABLE` (empresa SUSPENDED/CLOSED, sem vínculo ainda).
+2. `POST /api/sst/companies/pre-register` (`{ cnpj, name }` — só esses dois
+   campos; qualquer outro campo enviado é ignorado pelo Zod) — cria `Company`
+   (`controlStatus: UNCLAIMED`, `origin: SST_PROVIDER`, `createdByProviderId`
+   da sessão) + `SstProviderCompany` (`ACTIVE`, `ADMINISTRATION`) na MESMA
+   transação. Nunca cria uma segunda `Company` para o mesmo CNPJ — a
+   constraint única `(documentType, documentNormalized)` é a fonte final de
+   verdade; sob corrida (duas requisições, mesma consultoria ou outra), quem
+   perde captura o `P2002` e cai no fluxo de empresa existente (vira um
+   pedido `PENDING` comum, nunca herda `ADMINISTRATION` de graça).
+3. `POST /api/sst/companies/request-access` (`{ cnpj }`) — para uma empresa
+   já existente: cria `SstProviderCompany` `PENDING` (nunca concede acesso
+   imediato); não duplica se já `ACTIVE`/`PENDING`; nunca reativa
+   `SUSPENDED`/`REVOKED`/`REJECTED` automaticamente; nunca cria acesso para
+   empresa `SUSPENDED`/`CLOSED`.
+
+Estados do vínculo ganharam `REJECTED` (antes só `PENDING`/`ACTIVE`/
+`SUSPENDED`/`REVOKED`) — distinto de `REVOKED` (que só existe depois de ter
+sido `ACTIVE`) e de `SUSPENDED` (pausa reversível): uma solicitação recusada
+sem nunca ter sido autorizada. `REVOKED` e `REJECTED` são estados terminais —
+`updateProviderLinkStatus` (`lib/sst-providers.ts`) rejeita qualquer PATCH
+sobre um vínculo nesses estados.
+
+No Portal Empresa, `/configuracoes/sst-providers` ganhou "Aprovar" (com
+escolha do nível de acesso no momento da aprovação — não herda mais o nível
+pedido pela consultoria) e "Recusar" para vínculos `PENDING`, além de um
+badge com a contagem de solicitações pendentes.
+
+Rate limiting (`proxy.ts`, bucket `sst-cnpj`) cobre os três endpoints como
+camada extra contra enumeração de CNPJ, além da exigência de sessão OWNER
+autenticada.
+
+**Fora de escopo desta sprint** (ver spec original): cadastro/edição de
+colaboradores pela consultoria; `CompanyClaim` completo (o que acontece
+quando a empresa pré-cadastrada finalmente faz seu próprio cadastro real —
+hoje `/register` só bloqueia a duplicação com a mensagem "Esta empresa já
+possui um pré-cadastro...", nunca implementa a reivindicação em si); Super
+Admin; validação externa de CNPJ (Receita Federal); e-mail de notificação;
+merge automático de empresas duplicadas reais.
+
+## 17. Roadmap (Sprint Comercial 1.5+)
 
 - Certificados, upload de documentos.
 - Alertas persistidos para treinamento (extensão de `lib/alerts.ts`).
 - Relatórios completos, agenda avançada.
 - Notificações/WhatsApp.
-- Ações exclusivas de `OWNER` (gestão de outros `SstProviderUser` do
-  próprio provider) — usaria `requireSstRole("OWNER")`, já existente mas
-  sem nenhuma rota que o use ainda.
+- `CompanyClaim` completo (seção 16) — fluxo de reivindicação de uma empresa
+  `UNCLAIMED` quando ela finalmente se cadastra de verdade.
+- Cadastro/edição de colaboradores pela consultoria (deliberadamente adiado
+  até a aprovação do fluxo de pré-cadastro da seção 16).

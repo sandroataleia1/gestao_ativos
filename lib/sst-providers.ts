@@ -123,11 +123,24 @@ const LINK_STATUS_ACTION = {
   ACTIVE: "sst_provider.approve",
   SUSPENDED: "sst_provider.suspend",
   REVOKED: "sst_provider.revoke",
+  REJECTED: "sst_provider.reject",
 } as const;
 
-/** Autoriza/suspende/revoga um vínculo — sempre com ownership check
+/** Autoriza/suspende/revoga/recusa um vínculo — sempre com ownership check
  * (id + companyId) antes de agir. Registra a ação de audit correspondente
- * ao novo status (`sst_provider.approve`/`suspend`/`revoke`). */
+ * ao novo status (`sst_provider.approve`/`suspend`/`revoke`/`reject`).
+ *
+ * REVOKED e REJECTED são estados terminais (Sprint Comercial SST 1.4, §12/
+ * §15 — "não existe reativar um revogado", e uma solicitação recusada nunca
+ * é reconsiderada automaticamente): uma vez nesses estados, o vínculo nunca
+ * mais aceita PATCH — seria necessário um novo pedido de autorização
+ * (`linkExistingProvider`/pré-cadastro), nunca uma reativação silenciosa do
+ * registro antigo.
+ *
+ * `accessLevel` só tem efeito quando `status: "ACTIVE"` (a empresa escolhe
+ * o nível no momento da aprovação — §14); se omitido, mantém o nível já
+ * registrado no vínculo (comportamento anterior, preservado para não quebrar
+ * o fluxo de "Autorizar" já existente na tela). */
 export async function updateProviderLinkStatus(
   companyId: string,
   actor: { id: string; name: string },
@@ -140,12 +153,20 @@ export async function updateProviderLinkStatus(
   });
   if (!existing) throw new NotFoundError("Vínculo com prestador SST não encontrado.");
 
+  if (existing.status === "REVOKED" || existing.status === "REJECTED") {
+    throw new ValidationError(
+      "Este vínculo já foi encerrado e não pode ser alterado. É necessário um novo pedido de autorização.",
+    );
+  }
+
   return prisma.$transaction(async (tx) => {
     const link = await tx.sstProviderCompany.update({
       where: { id: linkId },
       data: {
         status: input.status,
-        ...(input.status === "ACTIVE" ? { approvedByUserId: actor.id, approvedAt: new Date() } : {}),
+        ...(input.status === "ACTIVE"
+          ? { approvedByUserId: actor.id, approvedAt: new Date(), ...(input.accessLevel ? { accessLevel: input.accessLevel } : {}) }
+          : {}),
         ...(input.status === "REVOKED" ? { revokedAt: new Date() } : {}),
       },
       include: providerLinkInclude,
@@ -159,7 +180,12 @@ export async function updateProviderLinkStatus(
       targetType: "SstProviderCompany",
       targetId: link.id,
       targetLabel: existing.provider.name,
-      metadata: { providerId: existing.providerId, previousStatus: existing.status, newStatus: input.status },
+      metadata: {
+        providerId: existing.providerId,
+        previousStatus: existing.status,
+        newStatus: input.status,
+        ...(input.status === "ACTIVE" ? { accessLevel: link.accessLevel } : {}),
+      },
     });
 
     return link;

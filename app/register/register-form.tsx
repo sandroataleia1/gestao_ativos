@@ -7,6 +7,7 @@ import {
   Building2Icon,
   EyeIcon,
   EyeOffIcon,
+  FileTextIcon,
   Loader2Icon,
   LockIcon,
   MailIcon,
@@ -19,12 +20,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { isValidBrazilianMobilePhone, maskBrazilianMobilePhone } from "@/lib/phone-mask";
+import { isValidCnpj, maskCnpjInput } from "@/lib/cnpj";
 import { focusFirstFieldWithError } from "@/lib/form-focus";
 
 const MIN_PASSWORD_LENGTH = 8;
 
 type FieldErrors = {
   companyName?: string;
+  cnpj?: string;
   name?: string;
   email?: string;
   phone?: string;
@@ -34,6 +37,7 @@ type FieldErrors = {
 
 type FormValues = {
   companyName: string;
+  cnpj: string;
   name: string;
   email: string;
   phone: string;
@@ -46,6 +50,12 @@ function validate(values: FormValues): FieldErrors {
 
   if (!values.companyName.trim()) {
     errors.companyName = "Informe o nome da empresa.";
+  }
+
+  if (!values.cnpj.trim()) {
+    errors.cnpj = "Informe o CNPJ da empresa.";
+  } else if (!isValidCnpj(values.cnpj)) {
+    errors.cnpj = "Informe um CNPJ válido.";
   }
 
   if (!values.name.trim()) {
@@ -80,6 +90,7 @@ function validate(values: FormValues): FieldErrors {
 
 const EMPTY_VALUES: FormValues = {
   companyName: "",
+  cnpj: "",
   name: "",
   email: "",
   phone: "",
@@ -108,6 +119,7 @@ export function RegisterForm() {
     if (Object.keys(errors).length > 0) {
       focusFirstFieldWithError(errors, [
         "companyName",
+        "cnpj",
         "name",
         "email",
         "phone",
@@ -125,6 +137,7 @@ export function RegisterForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           companyName: values.companyName,
+          cnpj: values.cnpj,
           name: values.name,
           email: values.email,
           phone: values.phone,
@@ -185,6 +198,26 @@ export function RegisterForm() {
         {fieldErrors.companyName ? (
           <p className="text-sm text-destructive">{fieldErrors.companyName}</p>
         ) : null}
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor="cnpj">CNPJ</Label>
+        <div className="relative">
+          <FileTextIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            id="cnpj"
+            name="cnpj"
+            inputMode="numeric"
+            autoComplete="off"
+            placeholder="00.000.000/0000-00"
+            value={values.cnpj}
+            onChange={(event) => setField("cnpj", maskCnpjInput(event.target.value))}
+            aria-invalid={Boolean(fieldErrors.cnpj)}
+            disabled={isSubmitting}
+            className="pl-8"
+          />
+        </div>
+        {fieldErrors.cnpj ? <p className="text-sm text-destructive">{fieldErrors.cnpj}</p> : null}
       </div>
 
       <div className="grid gap-2">

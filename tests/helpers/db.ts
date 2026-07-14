@@ -168,6 +168,16 @@ export async function cleanupFixtures(params: {
   const providerIds = params.providerIds ?? [];
 
   if (providerIds.length > 0) {
+    // Company.createdByProviderId usa onDelete: Restrict (Sprint Comercial
+    // SST 1.4 — pré-cadastro de empresa pela consultoria, ver
+    // lib/sst-company-provisioning.ts:preRegisterCompany) — precisa ser
+    // desvinculado antes de excluir o SstProvider, senão o DELETE falha com
+    // violação de FK. Nunca apaga a Company aqui, só remove a referência
+    // (a Company em si é limpa mais abaixo, escopada por companyIds).
+    await prisma.company.updateMany({
+      where: { createdByProviderId: { in: providerIds } },
+      data: { createdByProviderId: null },
+    });
     await prisma.sstProviderUser.deleteMany({ where: { providerId: { in: providerIds } } });
     await prisma.sstProviderCompany.deleteMany({ where: { providerId: { in: providerIds } } });
     await prisma.sstProvider.deleteMany({ where: { id: { in: providerIds } } });

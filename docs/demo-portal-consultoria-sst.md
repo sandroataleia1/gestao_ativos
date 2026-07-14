@@ -124,8 +124,13 @@ Cada passo indica a página/ação e o que dizer.
 | Comércio Épsilon (Demo SST) | Pendências mistas | 2 vencidos + 2 sem treinamento + 1 em dia; 1 turma em andamento |
 
 Todos os dados (nomes, CPFs, CNPJs) são fictícios — CPFs no padrão
-`000.000.XXX-XX` e CNPJs no padrão `00.000.000/00XX-00`, claramente não
-reais.
+`000.000.XXX-XX`, claramente não reais. CNPJs seguem a base `00.000.000/00XX`
+(claramente fictícia) com dígitos verificadores matematicamente válidos
+calculados a partir dela (Sprint Comercial SST 1.4, §19 — `lib/cnpj.ts`,
+`withValidCheckDigits`) — necessário porque, a partir dessa sprint, CNPJ é
+obrigatório e único por empresa em toda a plataforma (`documentType`+
+`documentNormalized`), então um placeholder puramente inválido (ex.:
+`00.000.000/0009-00`) não seria mais aceito por um cadastro real.
 
 ## 4. Mensagens comerciais
 

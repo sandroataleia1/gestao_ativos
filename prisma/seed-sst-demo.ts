@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { hashPassword } from "better-auth/crypto";
 import { prisma } from "@/lib/prisma";
 import { signUpEmailInternal } from "@/lib/auth";
+import { formatCnpj, normalizeCnpj, withValidCheckDigits } from "@/lib/cnpj";
 
 // Seed dedicado de demonstração comercial do Portal Consultoria SST (Sprint
 // Demo Comercial SST 1.0, Parte 10) — separado de prisma/seed.ts de
@@ -108,10 +109,21 @@ async function ensureProviderUser(providerId: string, userId: string, role: "OWN
   });
 }
 
+// CNPJs fictícios porém matematicamente válidos (Sprint Comercial SST 1.4,
+// §19) — antes cada empresa usava o placeholder "00.000.000/000X-00", que
+// falhava a validação de dígito verificador. Determinísticos (mesma base
+// numérica sempre gera o mesmo CNPJ) e nunca reaproveitados de nenhuma
+// empresa real conhecida.
+function fictionalCnpj(base12: string): string {
+  return formatCnpj(withValidCheckDigits(base12));
+}
+
 async function ensureCompany(name: string, document: string) {
   const existing = await prisma.company.findFirst({ where: { name } });
   if (existing) return existing;
-  return prisma.company.create({ data: { name, document } });
+  return prisma.company.create({
+    data: { name, document, documentType: "CNPJ", documentOriginal: document, documentNormalized: normalizeCnpj(document) },
+  });
 }
 
 async function ensureProviderCompanyLink(providerId: string, companyId: string, approvedByUserId: string) {
@@ -238,7 +250,7 @@ function demoDocument(companyIndex: number, employeeIndex: number) {
 }
 
 async function seedGoodComplianceCompany(providerId: string, approvedByUserId: string) {
-  const company = await ensureCompany("Metalúrgica Alfa (Demo SST)", "00.000.000/0009-00");
+  const company = await ensureCompany("Metalúrgica Alfa (Demo SST)", fictionalCnpj("000000000009"));
   await ensureProviderCompanyLink(providerId, company.id, approvedByUserId);
 
   const dept = await ensureDepartment(company.id, "Produção");
@@ -279,7 +291,7 @@ async function seedGoodComplianceCompany(providerId: string, approvedByUserId: s
 }
 
 async function seedMissingMandatoryCompany(providerId: string, approvedByUserId: string) {
-  const company = await ensureCompany("Construtora Beta (Demo SST)", "00.000.000/0010-00");
+  const company = await ensureCompany("Construtora Beta (Demo SST)", fictionalCnpj("000000000010"));
   await ensureProviderCompanyLink(providerId, company.id, approvedByUserId);
 
   const dept = await ensureDepartment(company.id, "Obras");
@@ -325,7 +337,7 @@ async function seedMissingMandatoryCompany(providerId: string, approvedByUserId:
 }
 
 async function seedExpiringSoonCompany(providerId: string, approvedByUserId: string) {
-  const company = await ensureCompany("Transportadora Gama (Demo SST)", "00.000.000/0011-00");
+  const company = await ensureCompany("Transportadora Gama (Demo SST)", fictionalCnpj("000000000011"));
   await ensureProviderCompanyLink(providerId, company.id, approvedByUserId);
 
   const dept = await ensureDepartment(company.id, "Logística");
@@ -369,7 +381,7 @@ async function seedExpiringSoonCompany(providerId: string, approvedByUserId: str
 }
 
 async function seedFutureClassCompany(providerId: string, approvedByUserId: string) {
-  const company = await ensureCompany("Indústria Delta (Demo SST)", "00.000.000/0012-00");
+  const company = await ensureCompany("Indústria Delta (Demo SST)", fictionalCnpj("000000000012"));
   await ensureProviderCompanyLink(providerId, company.id, approvedByUserId);
 
   const dept = await ensureDepartment(company.id, "Manutenção");
@@ -428,7 +440,7 @@ async function seedFutureClassCompany(providerId: string, approvedByUserId: stri
 }
 
 async function seedMixedPendencyCompany(providerId: string, approvedByUserId: string) {
-  const company = await ensureCompany("Comércio Épsilon (Demo SST)", "00.000.000/0013-00");
+  const company = await ensureCompany("Comércio Épsilon (Demo SST)", fictionalCnpj("000000000013"));
   await ensureProviderCompanyLink(providerId, company.id, approvedByUserId);
 
   const dept = await ensureDepartment(company.id, "Loja");
@@ -517,7 +529,7 @@ export async function seedSstDemo() {
   // caso 20).
   const anchorCompany = await ensureCompany(
     "Consultoria Segura SST — Acesso ao Portal (não remover)",
-    "00.000.000/0008-00",
+    fictionalCnpj("000000000008"),
   );
 
   const ownerUser = await ensurePortalUser(OWNER_EMAIL, OWNER_NAME, anchorCompany.id);

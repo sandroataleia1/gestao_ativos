@@ -36,6 +36,21 @@ const RULES: { matches: (pathname: string) => boolean; bucket: string; windowMs:
     windowMs: 60_000,
     max: 30,
   },
+  // Sprint Comercial SST 1.4, §18 — a consulta de CNPJ já exige sessão
+  // autenticada (OWNER da consultoria) e nunca faz busca parcial, mas
+  // recebe limite de taxa por IP como camada extra contra enumeração
+  // automatizada em massa (mesmo por uma sessão comprometida). Pré-cadastro/
+  // solicitação de acesso ganham o mesmo limite por serem as mutações que
+  // dependem da mesma checagem de CNPJ.
+  {
+    matches: (p) =>
+      p === "/api/sst/companies/check-cnpj" ||
+      p === "/api/sst/companies/pre-register" ||
+      p === "/api/sst/companies/request-access",
+    bucket: "sst-cnpj",
+    windowMs: 60_000,
+    max: 20,
+  },
 ];
 
 export function proxy(request: NextRequest) {

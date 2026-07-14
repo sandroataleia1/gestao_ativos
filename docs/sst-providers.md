@@ -146,3 +146,13 @@ aqui:
   empresa. Continua sem um fluxo de **auto-cadastro** de consultoria nova
   (quem entra no sistema pela primeira vez ainda depende do seed/provisão
   manual — não existe uma tela pública "cadastre sua consultoria").
+- ~~Sem pré-cadastro de empresa pela consultoria~~ — resolvido pela Sprint
+  Comercial SST 1.4 (ver `docs/portal-consultoria.md`, seção "Pré-cadastro
+  de empresa (Sprint 1.4)"): agora a consultoria também pode iniciar o
+  vínculo a partir do CNPJ, em `/sst/companies/new` — pré-cadastrando uma
+  empresa nova (`Company.controlStatus: UNCLAIMED`) ou solicitando
+  autorização a uma já existente. Continua não implementado: cadastro/edição
+  de colaboradores pela consultoria, reivindicação completa (`CompanyClaim`,
+  fluxo de "esta empresa já tem uma consultoria autorizada — manter ou
+  revogar?" no cadastro real), Super Admin, validação externa de CNPJ
+  (Receita Federal).

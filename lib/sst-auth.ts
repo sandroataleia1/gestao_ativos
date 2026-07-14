@@ -163,6 +163,20 @@ export async function requireSstAuthOrDeny() {
   }
 }
 
+/** Variante `OrDeny` de `requireSstRole` — usada por páginas acessadas
+ * diretamente por URL (ex.: /sst/companies/new) que exigem um papel
+ * específico (Sprint Comercial SST 1.4, §9: só OWNER inicia pré-cadastro/
+ * solicitação de acesso). */
+export async function requireSstRoleOrDeny(role: SstProviderUserRole) {
+  try {
+    return await requireSstRole(role);
+  } catch (error) {
+    if (error instanceof AuthError) unauthorized();
+    if (error instanceof ForbiddenError) forbidden();
+    throw error;
+  }
+}
+
 export async function requireSstProviderCompanyAccessOrDeny(companyId: string) {
   try {
     return await requireSstProviderCompanyAccess(companyId);

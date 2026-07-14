@@ -50,7 +50,12 @@ export type AuditAction =
   | "sst_provider.create"
   | "sst_provider.approve"
   | "sst_provider.suspend"
-  | "sst_provider.revoke";
+  | "sst_provider.revoke"
+  | "sst_provider.reject"
+  | "sst_company.pre_register"
+  | "sst_company.pre_register_race_recovered"
+  | "sst_company.request_access"
+  | "sst_company.request_access_denied";
 
 /**
  * Registra uma ação administrativa/de negócio crítica. Sempre chamado

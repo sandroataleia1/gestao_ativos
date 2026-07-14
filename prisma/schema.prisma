@@ -113,10 +113,16 @@ model Company {
   createdByProvider   SstProvider? @relation("CompaniesCreatedByProvider", fields: [createdByProviderId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   claimedAt            DateTime? // preenchido só quando a reivindicação (FUTURO) for concluída; NULL para todo registro existente (data histórica real desconhecida)
 
-  // Campos preparatórios para normalização futura de documento — NULLABLE e
-  // SEM backfill nesta migration (nenhum dos três é preenchido aqui). O
-  // campo legado `document` (acima) continua sendo a única fonte de verdade
-  // até uma migration futura decidir a transição.
+  // Normalização de documento (Sprint Comercial SST 1.4) — preenchidos em
+  // todo caminho de criação de empresa (registro público, pré-cadastro SST,
+  // seeds) e retroativamente para as empresas já existentes via
+  // scripts/backfill-company-documents.ts. Continuam NULLABLE (não NOT
+  // NULL): 1 empresa (possível dado real com CNPJ digitado incorretamente)
+  // não pôde ser corrigida sem inventar um CNPJ — ver o script e o relatório
+  // de entrega da sprint. `document` (acima) continua sincronizado
+  // (representação mascarada) enquanto outro código ainda o lê.
+  // `@@unique([documentType, documentNormalized])` abaixo é a última linha
+  // de defesa contra duas empresas com o mesmo CNPJ.
   documentType        CompanyDocumentType?
   documentOriginal    String?
   documentNormalized  String?
@@ -157,6 +163,18 @@ model Company {
   memberships               CompanyMembership[]
 
   @@index([createdByProviderId])
+  // Última linha de defesa contra duas empresas com o mesmo CNPJ (Sprint
+  // Comercial SST 1.4, §8) — sempre a fonte final de verdade contra corrida
+  // entre requisições concorrentes (o código de aplicação também confere
+  // antes de criar, mas só esta constraint garante atomicidade real).
+  // `documentType`/`documentNormalized` continuam NULLABLE nesta migration
+  // (não NOT NULL): 1 empresa em produção/dev ("Alves Shopping da
+  // construção LTDA", possível dado real com CNPJ digitado incorretamente)
+  // ainda não tem os dois campos preenchidos e não deve receber um CNPJ
+  // inventado — ver scripts/backfill-company-documents.ts. Índice único do
+  // Postgres permite múltiplos NULLs, então isso não bloqueia a constraint
+  // nem cria falso conflito entre registros ainda não migrados.
+  @@unique([documentType, documentNormalized])
 }
 
 // ---------------------------------------------------------------------------
@@ -1315,6 +1333,12 @@ enum SstProviderCompanyStatus {
   ACTIVE
   SUSPENDED
   REVOKED
+  // Sprint Comercial SST 1.4, §15 — distinto de REVOKED (que só existe após
+  // ter sido ACTIVE) e de SUSPENDED (pausa reversível de um vínculo já
+  // autorizado): REJECTED é o estado final de uma solicitação PENDING que a
+  // empresa recusou sem nunca ter autorizado. Nunca reutilizar REVOKED para
+  // isso — conflaria "já teve acesso e foi revogado" com "nunca teve acesso".
+  REJECTED
 }
 
 enum SstProviderCompanyAccessLevel {

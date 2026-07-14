@@ -43,7 +43,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-type ProviderLinkStatus = "PENDING" | "ACTIVE" | "SUSPENDED" | "REVOKED";
+type ProviderLinkStatus = "PENDING" | "ACTIVE" | "SUSPENDED" | "REVOKED" | "REJECTED";
 type ProviderAccessLevel = "VIEW" | "OPERATION" | "ADMINISTRATION";
 
 type ProviderLinkRow = {
@@ -59,6 +59,7 @@ const STATUS_LABELS: Record<ProviderLinkStatus, string> = {
   ACTIVE: "Ativo",
   SUSPENDED: "Suspenso",
   REVOKED: "Revogado",
+  REJECTED: "Recusado",
 };
 
 const STATUS_BADGE_VARIANT: Record<ProviderLinkStatus, "default" | "outline" | "secondary" | "destructive"> = {
@@ -66,7 +67,13 @@ const STATUS_BADGE_VARIANT: Record<ProviderLinkStatus, "default" | "outline" | "
   ACTIVE: "default",
   SUSPENDED: "secondary",
   REVOKED: "destructive",
+  REJECTED: "destructive",
 };
+
+// Estados terminais (Sprint Comercial SST 1.4, §12/§15) — nunca aceitam
+// nenhuma ação depois disso; um novo acesso exige um novo pedido de
+// autorização, nunca a reativação do vínculo antigo.
+const TERMINAL_STATUSES: ProviderLinkStatus[] = ["REVOKED", "REJECTED"];
 
 const ACCESS_LEVEL_LABELS: Record<ProviderAccessLevel, string> = {
   VIEW: "Visualização",
@@ -88,24 +95,45 @@ export function SstProvidersPanel({
 }) {
   const router = useRouter();
   const [createOpen, setCreateOpen] = useState(false);
+  const [approveTarget, setApproveTarget] = useState<ProviderLinkRow | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<ProviderLinkRow | null>(null);
   const [suspendTarget, setSuspendTarget] = useState<ProviderLinkRow | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<ProviderLinkRow | null>(null);
   const [isWorking, setIsWorking] = useState(false);
 
-  async function updateStatus(id: string, status: Exclude<ProviderLinkStatus, "PENDING">) {
+  const pendingCount = initialLinks.filter((link) => link.status === "PENDING").length;
+
+  async function updateStatus(id: string, status: Exclude<ProviderLinkStatus, "PENDING">, accessLevel?: ProviderAccessLevel) {
     const response = await fetch(`/api/sst-providers/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, ...(accessLevel ? { accessLevel } : {}) }),
     });
     if (!response.ok) throw new Error(await parseErrorMessage(response));
   }
 
-  async function handleAuthorize(link: ProviderLinkRow) {
+  async function handleApproveConfirm(accessLevel: ProviderAccessLevel) {
+    if (!approveTarget) return;
     setIsWorking(true);
     try {
-      await updateStatus(link.id, "ACTIVE");
-      toast.success(`${link.provider.name} autorizado.`);
+      await updateStatus(approveTarget.id, "ACTIVE", accessLevel);
+      toast.success(`${approveTarget.provider.name} autorizado.`);
+      setApproveTarget(null);
+      router.refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Erro inesperado.");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleRejectConfirm() {
+    if (!rejectTarget) return;
+    setIsWorking(true);
+    try {
+      await updateStatus(rejectTarget.id, "REJECTED");
+      toast.success(`Solicitação de ${rejectTarget.provider.name} recusada.`);
+      setRejectTarget(null);
       router.refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Erro inesperado.");
@@ -147,7 +175,17 @@ export function SstProvidersPanel({
   return (
     <div className="grid gap-4">
       {canManage ? (
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between gap-2">
+          {pendingCount > 0 ? (
+            <div className="flex items-center gap-2">
+              <Badge variant="outline">{pendingCount}</Badge>
+              <span className="text-sm text-muted-foreground">
+                {pendingCount === 1 ? "solicitação de acesso pendente" : "solicitações de acesso pendentes"}
+              </span>
+            </div>
+          ) : (
+            <span />
+          )}
           <Button onClick={() => setCreateOpen(true)}>
             <SearchIcon />
             Buscar prestador
@@ -180,7 +218,7 @@ export function SstProvidersPanel({
                   </TableCell>
                   {canManage ? (
                     <TableCell>
-                      {link.status === "REVOKED" ? null : (
+                      {TERMINAL_STATUSES.includes(link.status) ? null : (
                         <div className="flex justify-end">
                           <DropdownMenu>
                             <Tooltip>
@@ -198,8 +236,18 @@ export function SstProvidersPanel({
                               <TooltipContent>Ações</TooltipContent>
                             </Tooltip>
                             <DropdownMenuContent align="end">
-                              {link.status === "PENDING" || link.status === "SUSPENDED" ? (
-                                <DropdownMenuItem onClick={() => handleAuthorize(link)} disabled={isWorking}>
+                              {link.status === "PENDING" ? (
+                                <>
+                                  <DropdownMenuItem onClick={() => setApproveTarget(link)} disabled={isWorking}>
+                                    Aprovar
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem variant="destructive" onClick={() => setRejectTarget(link)} disabled={isWorking}>
+                                    Recusar
+                                  </DropdownMenuItem>
+                                </>
+                              ) : null}
+                              {link.status === "SUSPENDED" ? (
+                                <DropdownMenuItem onClick={() => setApproveTarget(link)} disabled={isWorking}>
                                   Autorizar
                                 </DropdownMenuItem>
                               ) : null}
@@ -208,9 +256,11 @@ export function SstProvidersPanel({
                                   Suspender
                                 </DropdownMenuItem>
                               ) : null}
-                              <DropdownMenuItem variant="destructive" onClick={() => setRevokeTarget(link)}>
-                                Revogar
-                              </DropdownMenuItem>
+                              {link.status === "ACTIVE" || link.status === "SUSPENDED" ? (
+                                <DropdownMenuItem variant="destructive" onClick={() => setRevokeTarget(link)}>
+                                  Revogar
+                                </DropdownMenuItem>
+                              ) : null}
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </div>
@@ -248,6 +298,35 @@ export function SstProvidersPanel({
           }}
         />
       ) : null}
+
+      <ApproveLinkDialog
+        target={approveTarget}
+        isWorking={isWorking}
+        onCancel={() => setApproveTarget(null)}
+        onConfirm={handleApproveConfirm}
+      />
+
+      <AlertDialog open={Boolean(rejectTarget)} onOpenChange={(open) => !open && setRejectTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Recusar solicitação de {rejectTarget?.provider.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              A consultoria não terá acesso aos dados desta empresa. Ação definitiva — para
+              autorizar essa consultoria no futuro, será necessário um novo pedido.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isWorking}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleRejectConfirm}
+              disabled={isWorking}
+              className="bg-destructive text-white hover:bg-destructive/90"
+            >
+              {isWorking ? "Recusando..." : "Recusar"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={Boolean(suspendTarget)} onOpenChange={(open) => !open && setSuspendTarget(null)}>
         <AlertDialogContent>
@@ -294,6 +373,72 @@ export function SstProvidersPanel({
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+/** Aprova (ACTIVE) um vínculo PENDING ou reautoriza um SUSPENDED — a empresa
+ * escolhe o nível de acesso no momento da aprovação (Sprint Comercial SST
+ * 1.4, §14), em vez de herdar o nível pedido pela consultoria. */
+function ApproveLinkDialog({
+  target,
+  isWorking,
+  onCancel,
+  onConfirm,
+}: {
+  target: ProviderLinkRow | null;
+  isWorking: boolean;
+  onCancel: () => void;
+  onConfirm: (accessLevel: ProviderAccessLevel) => void;
+}) {
+  const [accessLevel, setAccessLevel] = useState<ProviderAccessLevel>("OPERATION");
+
+  useEffect(() => {
+    if (target) setAccessLevel(target.accessLevel);
+  }, [target]);
+
+  return (
+    <Dialog open={Boolean(target)} onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Autorizar {target?.provider.name}</DialogTitle>
+          <DialogDescription>
+            Escolha o nível de acesso que esta consultoria terá sobre os dados desta empresa.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-2">
+          <Label>Nível de acesso</Label>
+          <Select
+            items={ACCESS_LEVEL_LABELS}
+            value={accessLevel}
+            onValueChange={(value) => setAccessLevel(value as ProviderAccessLevel)}
+            disabled={isWorking}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(ACCESS_LEVEL_LABELS).map(([value, label]) => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            Só Operação ou Administração permitem gerenciar treinamentos.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onCancel} disabled={isWorking}>
+            Cancelar
+          </Button>
+          <Button type="button" onClick={() => onConfirm(accessLevel)} disabled={isWorking}>
+            {isWorking ? <Loader2Icon className="animate-spin" /> : null}
+            Autorizar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
