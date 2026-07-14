@@ -32,13 +32,17 @@ próprio nível de acesso e status. O isolamento multi-tenant não vem de
 - Toda leitura do lado da empresa (`GET /api/sst-providers`) retorna
   vínculos, com o provider aninhado — nunca uma lista global de
   `SstProvider`.
-- Criar um prestador pela tela da empresa (`POST /api/sst-providers`) cria
-  as duas linhas juntas (`SstProvider` + `SstProviderCompany` com
-  `status: PENDING`) na mesma transação. Não existe, nesta etapa, um fluxo
-  de "buscar prestador já cadastrado por outra empresa e vincular" — cada
-  empresa cria seu próprio registro, mesmo que na vida real seja a mesma
-  consultoria. Deduplicação/reuso entre empresas fica para quando o Portal
-  Consultoria existir de fato.
+- **Atualizado (agora que o Portal Consultoria existe de fato)**: a empresa
+  não cria mais um `SstProvider` do zero. `GET /api/sst-providers/search?q=`
+  busca por nome entre os prestadores já cadastrados (globais, ativos, e
+  ainda sem vínculo com esta empresa) — a tela deixa a empresa encontrar e
+  selecionar a consultoria real, em vez de digitar os dados de novo.
+  `POST /api/sst-providers` agora recebe `{ providerId, accessLevel }` e só
+  cria o `SstProviderCompany` (`status: PENDING`) apontando pro provider
+  já existente; nunca cria uma segunda linha de `SstProvider` pra mesma
+  consultoria. Isso resolve a deduplicação entre empresas mencionada mais
+  abaixo (seção 7) — múltiplas empresas que autorizam a mesma consultoria
+  agora apontam pro mesmo registro de `SstProvider`.
 
 ## 3. Regras do vínculo (`SstProviderCompany`)
 
@@ -137,6 +141,8 @@ aqui:
   deve reescrever silenciosamente a configuração de treinamentos já
   existentes; a tela de edição vai deixar isso visível quando o vínculo não
   estiver mais `ACTIVE`).
-- Sem dedup entre empresas — cada empresa cria seu próprio `SstProvider`,
-  mesmo que seja a mesma consultoria de verdade usada por outra empresa
-  (ver seção 2).
+- ~~Sem dedup entre empresas~~ — resolvido (ver seção 2): a busca agora
+  vincula ao `SstProvider` já existente em vez de criar um novo por
+  empresa. Continua sem um fluxo de **auto-cadastro** de consultoria nova
+  (quem entra no sistema pela primeira vez ainda depende do seed/provisão
+  manual — não existe uma tela pública "cadastre sua consultoria").

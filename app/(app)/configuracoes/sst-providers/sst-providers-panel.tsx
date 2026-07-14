@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2Icon, MoreHorizontalIcon, PlusIcon } from "lucide-react";
+import { Loader2Icon, MoreHorizontalIcon, SearchIcon } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "sonner";
 
@@ -149,8 +149,8 @@ export function SstProvidersPanel({
       {canManage ? (
         <div className="flex justify-end">
           <Button onClick={() => setCreateOpen(true)}>
-            <PlusIcon />
-            Novo prestador
+            <SearchIcon />
+            Buscar prestador
           </Button>
         </div>
       ) : null}
@@ -223,11 +223,11 @@ export function SstProvidersPanel({
               <TableRow>
                 <TableCell colSpan={canManage ? 6 : 5} className="h-32 text-center">
                   <div className="grid justify-items-center gap-2 text-muted-foreground">
-                    <p>Nenhum prestador SST cadastrado ainda.</p>
+                    <p>Nenhum prestador SST autorizado ainda.</p>
                     {canManage ? (
                       <Button size="sm" onClick={() => setCreateOpen(true)}>
-                        <PlusIcon />
-                        Cadastrar o primeiro prestador
+                        <SearchIcon />
+                        Buscar prestador
                       </Button>
                     ) : null}
                   </div>
@@ -239,7 +239,7 @@ export function SstProvidersPanel({
       </div>
 
       {canManage ? (
-        <CreateProviderDialog
+        <SearchAndLinkProviderDialog
           open={createOpen}
           onOpenChange={setCreateOpen}
           onSuccess={() => {
@@ -297,7 +297,22 @@ export function SstProvidersPanel({
   );
 }
 
-function CreateProviderDialog({
+type ProviderSearchResult = { id: string; name: string; document: string | null };
+
+const SEARCH_DEBOUNCE_MS = 300;
+const MIN_QUERY_LENGTH = 3;
+
+/**
+ * Busca de prestador SST já cadastrado no sistema, com seleção e
+ * autorização — substitui o antigo formulário "Novo prestador" (que criava
+ * um `SstProvider` do zero a cada empresa, mesmo para a mesma consultoria
+ * real; ver docs/sst-providers.md, seção 2). Aqui a empresa só ENCONTRA e
+ * VINCULA um prestador que já existe — nunca cria um registro novo. O
+ * vínculo nasce PENDING, igual antes; "Autorizar" continua sendo a ação
+ * separada já existente na tabela (mantém a distinção de audit trail entre
+ * "vínculo criado" e "vínculo aprovado").
+ */
+function SearchAndLinkProviderDialog({
   open,
   onOpenChange,
   onSuccess,
@@ -306,37 +321,58 @@ function CreateProviderDialog({
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [document, setDocument] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<ProviderSearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [selected, setSelected] = useState<ProviderSearchResult | null>(null);
   const [accessLevel, setAccessLevel] = useState<ProviderAccessLevel>("OPERATION");
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (open) {
-      setName("");
-      setDocument("");
-      setEmail("");
-      setPhone("");
+      setQuery("");
+      setResults([]);
+      setSelected(null);
       setAccessLevel("OPERATION");
       setFormError(null);
     }
   }, [open]);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  useEffect(() => {
+    if (!open || selected) return;
+    if (query.trim().length < MIN_QUERY_LENGTH) {
+      setResults([]);
+      return;
+    }
+    setIsSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/sst-providers/search?q=${encodeURIComponent(query.trim())}`);
+        if (!response.ok) throw new Error(await parseErrorMessage(response));
+        const data = (await response.json()) as { providers: ProviderSearchResult[] };
+        setResults(data.providers);
+      } catch {
+        setResults([]);
+      } finally {
+        setIsSearching(false);
+      }
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [query, open, selected]);
+
+  async function handleLink() {
+    if (!selected) return;
     setFormError(null);
     setIsSubmitting(true);
     try {
       const response = await fetch("/api/sst-providers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, document, email, phone, accessLevel }),
+        body: JSON.stringify({ providerId: selected.id, accessLevel }),
       });
       if (!response.ok) throw new Error(await parseErrorMessage(response));
-      toast.success("Prestador cadastrado — autorize o vínculo para liberar o acesso.");
+      toast.success(`${selected.name} vinculado — use "Autorizar" na lista para liberar o acesso.`);
       onSuccess();
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "Erro inesperado.");
@@ -349,53 +385,82 @@ function CreateProviderDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Novo prestador SST</DialogTitle>
+          <DialogTitle>Buscar prestador SST</DialogTitle>
           <DialogDescription>
-            O prestador nasce pendente — use &quot;Autorizar&quot; na lista para liberar o acesso.
+            Encontre uma consultoria já cadastrada no sistema e autorize o acesso — o vínculo nasce
+            pendente, use &quot;Autorizar&quot; na lista para liberar o acesso.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="grid gap-4">
+        <div className="grid gap-4">
           {formError ? <p className="text-sm text-destructive">{formError}</p> : null}
-          <div className="grid gap-2">
-            <Label htmlFor="provider-name">Nome</Label>
-            <Input
-              id="provider-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              disabled={isSubmitting}
-              required
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="provider-document">CNPJ/CPF</Label>
-            <Input
-              id="provider-document"
-              value={document}
-              onChange={(e) => setDocument(e.target.value)}
-              disabled={isSubmitting}
-            />
-          </div>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="grid gap-2">
-              <Label htmlFor="provider-email">E-mail</Label>
-              <Input
-                id="provider-email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                disabled={isSubmitting}
-              />
+
+          {selected ? (
+            <div className="grid gap-1 rounded-lg border bg-muted/30 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="font-medium">{selected.name}</p>
+                  {selected.document ? (
+                    <p className="text-xs text-muted-foreground">{selected.document}</p>
+                  ) : null}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSelected(null)}
+                  disabled={isSubmitting}
+                >
+                  Trocar
+                </Button>
+              </div>
             </div>
+          ) : (
             <div className="grid gap-2">
-              <Label htmlFor="provider-phone">Telefone</Label>
-              <Input
-                id="provider-phone"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                disabled={isSubmitting}
-              />
+              <Label htmlFor="provider-search">Nome do prestador</Label>
+              <div className="relative">
+                <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="provider-search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Digite ao menos 3 letras do nome..."
+                  className="pl-8"
+                  autoFocus
+                />
+              </div>
+
+              {query.trim().length >= MIN_QUERY_LENGTH ? (
+                <div className="grid max-h-56 gap-1 overflow-y-auto rounded-lg border">
+                  {isSearching ? (
+                    <p className="p-3 text-center text-sm text-muted-foreground">Buscando...</p>
+                  ) : results.length === 0 ? (
+                    <p className="p-3 text-center text-sm text-muted-foreground">
+                      Nenhum prestador encontrado com esse nome.
+                    </p>
+                  ) : (
+                    results.map((provider) => (
+                      <button
+                        key={provider.id}
+                        type="button"
+                        onClick={() => setSelected(provider)}
+                        className="grid cursor-pointer gap-0.5 border-b p-2.5 text-left last:border-b-0 hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                      >
+                        <span className="text-sm font-medium">{provider.name}</span>
+                        {provider.document ? (
+                          <span className="text-xs text-muted-foreground">{provider.document}</span>
+                        ) : null}
+                      </button>
+                    ))
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Digite ao menos 3 letras para buscar.
+                </p>
+              )}
             </div>
-          </div>
+          )}
+
           <div className="grid gap-2">
             <Label>Nível de acesso</Label>
             <Select
@@ -419,13 +484,13 @@ function CreateProviderDialog({
               Só Operação ou Administração permitem gerenciar treinamentos.
             </p>
           </div>
-          <DialogFooter>
-            <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? <Loader2Icon className="animate-spin" /> : null}
-              Criar
-            </Button>
-          </DialogFooter>
-        </form>
+        </div>
+        <DialogFooter>
+          <Button type="button" onClick={handleLink} disabled={isSubmitting || !selected}>
+            {isSubmitting ? <Loader2Icon className="animate-spin" /> : null}
+            Vincular
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

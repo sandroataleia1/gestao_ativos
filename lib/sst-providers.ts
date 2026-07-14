@@ -1,8 +1,9 @@
+import { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
-import { NotFoundError, ValidationError } from "@/lib/api-errors";
+import { ConflictError, NotFoundError, ValidationError } from "@/lib/api-errors";
 import { logAudit } from "@/lib/audit";
 import { resolveTrainingAuthorization } from "@/lib/training-authorization";
-import type { SstProviderCreateInput, SstProviderLinkStatusUpdateInput } from "@/lib/validations/sst-provider";
+import type { SstProviderLinkCreateInput, SstProviderLinkStatusUpdateInput } from "@/lib/validations/sst-provider";
 
 export const providerLinkInclude = {
   provider: { select: { id: true, name: true, document: true, email: true, phone: true, active: true } },
@@ -19,49 +20,103 @@ export async function getProviderLinksForCompany(companyId: string) {
   });
 }
 
-/** Cria o SstProvider e o vínculo SstProviderCompany (status: PENDING) na
- * mesma transação — o vínculo só vira ACTIVE por uma ação separada de
- * autorização (updateProviderLinkStatus). Registra `sst_provider.create`
- * no audit trail (nunca inclui `document` no metadata/targetLabel — CNPJ/
- * CPF é dado sensível, ver lib/audit.ts). */
-export async function createProviderWithLink(
+const MAX_SEARCH_RESULTS = 10;
+
+/** Busca prestadores SST já cadastrados no sistema (globais — `SstProvider`
+ * não tem `companyId`, ver docs/sst-providers.md) por nome, para a empresa
+ * escolher e autorizar — nunca cria um registro novo pela tela da empresa
+ * (Sprint "busca de SST cadastrada com seleção e autorização"). Exclui
+ * prestadores inativos e qualquer um que já tenha ALGUM vínculo com esta
+ * empresa (em qualquer status — inclusive REVOKED, já que
+ * `@@unique([providerId, companyId])` impede um segundo vínculo para o
+ * mesmo par; esse já aparece na tabela de vínculos existentes da própria
+ * tela, não faz sentido reoferecer na busca). Retorna só `id`/`name`/
+ * `document` — o suficiente para a empresa reconhecer a consultoria certa
+ * (útil quando duas têm nomes parecidos); e-mail/telefone só ficam visíveis
+ * depois que o vínculo existe (tabela principal da tela).
+ */
+export async function searchAuthorizableProviders(companyId: string, query: string) {
+  const trimmed = query.trim();
+  if (trimmed.length < 3) return [];
+
+  const alreadyLinked = await prisma.sstProviderCompany.findMany({
+    where: { companyId },
+    select: { providerId: true },
+  });
+
+  return prisma.sstProvider.findMany({
+    where: {
+      active: true,
+      name: { contains: trimmed, mode: "insensitive" },
+      id: { notIn: alreadyLinked.map((link) => link.providerId) },
+    },
+    select: { id: true, name: true, document: true },
+    orderBy: { name: "asc" },
+    take: MAX_SEARCH_RESULTS,
+  });
+}
+
+/** Vincula um SstProvider JÁ EXISTENTE (encontrado via
+ * `searchAuthorizableProviders`) à empresa — cria só o SstProviderCompany
+ * (status: PENDING); NUNCA cria um SstProvider novo. `providerId` é sempre
+ * revalidado no servidor: precisa existir, estar `active`, e ainda não ter
+ * vínculo com esta empresa (nunca confia que o client só mostrou opções
+ * válidas — a mesma checagem de "nunca confiar no client" já usada em toda
+ * API deste projeto). Autorizar (status: ACTIVE) continua sendo uma ação
+ * separada (updateProviderLinkStatus), preservando a distinção de audit
+ * trail entre "vínculo criado" e "vínculo aprovado". */
+export async function linkExistingProvider(
   companyId: string,
   actor: { id: string; name: string },
-  input: SstProviderCreateInput,
+  input: SstProviderLinkCreateInput,
 ) {
-  return prisma.$transaction(async (tx) => {
-    const provider = await tx.sstProvider.create({
-      data: {
-        name: input.name,
-        document: input.document,
-        email: input.email,
-        phone: input.phone,
-      },
-    });
+  const provider = await prisma.sstProvider.findUnique({ where: { id: input.providerId } });
+  if (!provider || !provider.active) {
+    throw new ValidationError("Prestador SST inválido ou inativo.");
+  }
 
-    const link = await tx.sstProviderCompany.create({
-      data: {
-        providerId: provider.id,
-        companyId,
-        accessLevel: input.accessLevel,
-        status: "PENDING",
-      },
-      include: providerLinkInclude,
-    });
-
-    await logAudit(tx, {
-      companyId,
-      actorUserId: actor.id,
-      actorName: actor.name,
-      action: "sst_provider.create",
-      targetType: "SstProviderCompany",
-      targetId: link.id,
-      targetLabel: provider.name,
-      metadata: { providerId: provider.id, accessLevel: input.accessLevel },
-    });
-
-    return link;
+  const existingLink = await prisma.sstProviderCompany.findUnique({
+    where: { providerId_companyId: { providerId: provider.id, companyId } },
+    select: { id: true },
   });
+  if (existingLink) {
+    throw new ConflictError("Este prestador já tem um vínculo com esta empresa.");
+  }
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const link = await tx.sstProviderCompany.create({
+        data: {
+          providerId: provider.id,
+          companyId,
+          accessLevel: input.accessLevel,
+          status: "PENDING",
+        },
+        include: providerLinkInclude,
+      });
+
+      await logAudit(tx, {
+        companyId,
+        actorUserId: actor.id,
+        actorName: actor.name,
+        action: "sst_provider.create",
+        targetType: "SstProviderCompany",
+        targetId: link.id,
+        targetLabel: provider.name,
+        metadata: { providerId: provider.id, accessLevel: input.accessLevel },
+      });
+
+      return link;
+    });
+  } catch (error) {
+    // Cinturão de segurança contra corrida (duas abas vinculando o mesmo
+    // provider ao mesmo tempo) — a checagem acima já cobre o caso comum,
+    // isto pega só a janela entre o SELECT e o INSERT.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      throw new ConflictError("Este prestador já tem um vínculo com esta empresa.");
+    }
+    throw error;
+  }
 }
 
 const LINK_STATUS_ACTION = {
