@@ -22,6 +22,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { isValidBrazilianMobilePhone, maskBrazilianMobilePhone } from "@/lib/phone-mask";
 import { isValidCnpj, maskCnpjInput } from "@/lib/cnpj";
 import { focusFirstFieldWithError } from "@/lib/form-focus";
+import { resolveRegisterSuccessOutcome, type RegisterSuccessBody } from "@/lib/register-response";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -105,6 +106,11 @@ export function RegisterForm() {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Sprint SST 1.4C.1 — mensagem intermediária durante o redirecionamento
+  // pós-cadastro (nunca um erro, nunca some antes do router.push concluir a
+  // navegação). `isSubmitting` continua true nesse intervalo — o botão
+  // permanece desabilitado, o que já impede submissão duplicada.
+  const [redirectMessage, setRedirectMessage] = useState<string | null>(null);
 
   function setField<K extends keyof FormValues>(key: K, value: FormValues[K]) {
     setValues((prev) => ({ ...prev, [key]: value }));
@@ -157,11 +163,26 @@ export function RegisterForm() {
       return;
     }
 
-    // Reivindicação de um CNPJ pré-cadastrado por uma consultoria SST
-    // (Sprint Comercial SST 1.4, §16) — a empresa precisa decidir sobre
-    // cada vínculo provisório antes de acessar o resto do sistema.
-    const data = (await response.json().catch(() => null)) as { claimPending?: boolean } | null;
-    router.push(data?.claimPending ? "/onboarding/sst-providers" : "/dashboard");
+    // Sprint SST 1.4C.1 — desde a Sprint SST 1.4C, /api/register NUNCA mais
+    // concede acesso direto ao Portal Empresa: toda tentativa bem-sucedida
+    // (CNPJ novo, CNPJ de empresa UNCLAIMED pré-cadastrada por uma
+    // consultoria, ou reivindicação concorrente que virou DISPUTED) devolve
+    // sempre `{ ok: true, status: "CLAIM_REVIEW_REQUIRED" }` — a conta foi
+    // criada, mas só uma CompanyClaimRequest PENDING existe, nunca uma
+    // CompanyMembership. Único destino correto é a página de
+    // acompanhamento, nunca /dashboard (que hoje redirecionaria de volta
+    // pra cá de qualquer forma via requireCompanyOrDeny(), mas só depois de
+    // uma navegação a mais e um flash de conteúdo). Nunca depende de CNPJ
+    // na query string nem de um companyId devolvido pelo servidor — a
+    // página de acompanhamento resolve tudo a partir da sessão do usuário
+    // autenticado (ver app/company-claim/pending/page.tsx).
+    const data = (await response.json().catch(() => null)) as RegisterSuccessBody;
+    const outcome = resolveRegisterSuccessOutcome(data);
+    setRedirectMessage(outcome.message);
+    // `isSubmitting` continua true durante o redirecionamento — o botão
+    // permanece desabilitado, impedindo um segundo submit acidental
+    // enquanto a navegação está em andamento.
+    router.push(outcome.redirectTo);
     router.refresh();
   }
 
@@ -175,7 +196,12 @@ export function RegisterForm() {
       method="post"
       className="grid gap-4"
     >
-      {formError ? (
+      {redirectMessage ? (
+        <Alert>
+          <Loader2Icon className="animate-spin" />
+          <AlertDescription>{redirectMessage}</AlertDescription>
+        </Alert>
+      ) : formError ? (
         <Alert variant="destructive">
           <AlertCircleIcon />
           <AlertDescription>{formError}</AlertDescription>

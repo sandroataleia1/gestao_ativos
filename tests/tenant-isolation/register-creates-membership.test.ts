@@ -80,29 +80,35 @@ describe("Sprint SST 1.4C — registro nunca concede acesso automático a partir
     expect(body.status).toBe("CLAIM_REVIEW_REQUIRED");
 
     const user = await prisma.user.findUniqueOrThrow({ where: { email } });
-    createdCompanyIds.push(user.companyId);
+
+    // Sprint SST 1.4C.1, §4 — User.companyId permanece null: a única
+    // associação real é CompanyClaimRequest.requesterUserId, nunca a
+    // preferência legada.
+    expect(user.companyId).toBeNull();
+
+    // Cria exatamente uma CompanyClaimRequest PENDING para este usuário —
+    // é através dela (nunca de user.companyId) que a empresa é encontrada.
+    const claim = await prisma.companyClaimRequest.findFirstOrThrow({
+      where: { requesterUserId: user.id },
+    });
+    createdCompanyIds.push(claim.companyId);
+    expect(claim.status).toBe("PENDING");
+    expect(claim.origin).toBe("SELF_REGISTRATION");
 
     // Nunca cria CompanyMembership diretamente.
     const membership = await prisma.companyMembership.findUnique({
-      where: { userId_companyId: { userId: user.id, companyId: user.companyId } },
+      where: { userId_companyId: { userId: user.id, companyId: claim.companyId } },
     });
     expect(membership).toBeNull();
 
     // Nunca atribui papel ADMIN diretamente.
     const userRole = await prisma.userRole.findFirst({
-      where: { userId: user.id, companyId: user.companyId, role: { name: "ADMIN" } },
+      where: { userId: user.id, companyId: claim.companyId, role: { name: "ADMIN" } },
     });
     expect(userRole).toBeNull();
 
-    // Cria exatamente uma CompanyClaimRequest PENDING para (empresa, usuário).
-    const claim = await prisma.companyClaimRequest.findUniqueOrThrow({
-      where: { companyId_requesterUserId: { companyId: user.companyId, requesterUserId: user.id } },
-    });
-    expect(claim.status).toBe("PENDING");
-    expect(claim.origin).toBe("SELF_REGISTRATION");
-
     // Company nasce CLAIM_PENDING (nunca CLAIMED automaticamente) — §9.
-    const company = await prisma.company.findUniqueOrThrow({ where: { id: user.companyId } });
+    const company = await prisma.company.findUniqueOrThrow({ where: { id: claim.companyId } });
     expect(company.controlStatus).toBe("CLAIM_PENDING");
     expect(company.claimedAt).toBeNull();
   });

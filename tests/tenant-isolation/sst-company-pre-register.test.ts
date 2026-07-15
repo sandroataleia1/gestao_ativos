@@ -334,13 +334,15 @@ describe("POST /api/sst/companies/pre-register (§11)", () => {
     const { preRegisterCompany } = await import("@/lib/sst-company-provisioning");
 
     const providerX = await makeProvider("prereg-race2-x");
-    const rawX = await createTestUser((await createTestCompany("prereg-race2-x-anchor")).id, "prereg-race2-x-u");
-    companyIds.push(rawX.companyId);
+    const anchorX = await createTestCompany("prereg-race2-x-anchor");
+    companyIds.push(anchorX.id);
+    const rawX = await createTestUser(anchorX.id, "prereg-race2-x-u");
     await createProviderUser({ providerId: providerX.id, userId: rawX.id, role: "OWNER" });
 
     const providerY = await makeProvider("prereg-race2-y");
-    const rawY = await createTestUser((await createTestCompany("prereg-race2-y-anchor")).id, "prereg-race2-y-u");
-    companyIds.push(rawY.companyId);
+    const anchorY = await createTestCompany("prereg-race2-y-anchor");
+    companyIds.push(anchorY.id);
+    const rawY = await createTestUser(anchorY.id, "prereg-race2-y-u");
     await createProviderUser({ providerId: providerY.id, userId: rawY.id, role: "OWNER" });
 
     const cnpj = uniqueCnpj();

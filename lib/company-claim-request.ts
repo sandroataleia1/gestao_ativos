@@ -212,6 +212,17 @@ export async function approveCompanyClaimRequest(params: {
   const preCheck = await prisma.companyClaimRequest.findUnique({ where: { id: claimRequestId } });
   if (!preCheck) throw new NotFoundError("Solicitação de reivindicação não encontrada.");
   if (!ACTIVE_CLAIM_STATUSES.includes(preCheck.status as (typeof ACTIVE_CLAIM_STATUSES)[number])) {
+    // Sprint SST 1.4C.1, §11 — "aprovação de claim fora de PENDING/
+    // UNDER_REVIEW".
+    await logAudit(prisma, {
+      companyId: preCheck.companyId,
+      actorUserId: reviewer.id,
+      actorName: reviewer.name,
+      action: "company_claim.invalid_transition",
+      targetType: "CompanyClaimRequest",
+      targetId: claimRequestId,
+      metadata: { attemptedAction: "approve", fromStatus: preCheck.status },
+    }).catch(() => {});
     throw new ConflictError("Esta solicitação já foi revisada.");
   }
 
@@ -253,6 +264,24 @@ export async function approveCompanyClaimRequest(params: {
     const membership = await tx.companyMembership.create({
       data: { userId: preCheck.requesterUserId, companyId: preCheck.companyId, status: "ACTIVE", activatedAt: new Date() },
     });
+
+    // Sprint SST 1.4C.1, §5 — `User.companyId` (preferência legada, nunca
+    // autorização) só é preenchido AQUI, depois que a CompanyMembership real
+    // já existe. Nunca sobrescreve silenciosamente a preferência de um
+    // usuário multiempresa: se ele já tinha um `companyId` (própria ou de
+    // uma aprovação anterior), preserva — a nova membership continua
+    // funcionando via `active_company_id`/seleção de empresa, nunca depende
+    // de virar a preferência padrão para ficar acessível.
+    const requesterUser = await tx.user.findUniqueOrThrow({
+      where: { id: preCheck.requesterUserId },
+      select: { companyId: true },
+    });
+    if (!requesterUser.companyId) {
+      await tx.user.update({
+        where: { id: preCheck.requesterUserId },
+        data: { companyId: preCheck.companyId },
+      });
+    }
 
     // Invalida outras solicitações concorrentes ativas para a mesma empresa
     // (§13 item 12) — nunca ficam esquecidas como PENDING órfão depois que
@@ -334,7 +363,22 @@ export async function rejectCompanyClaimRequest(params: {
       where: { id: claimRequestId, status: { in: [...ACTIVE_CLAIM_STATUSES] } },
       data: { status: "REJECTED", reviewedAt: new Date(), reviewedByUserId: reviewer.id, rejectionReason: reason ?? null },
     });
-    if (count === 0) throw new ConflictError("Esta solicitação já foi revisada.");
+    if (count === 0) {
+      // Sprint SST 1.4C.1, §11 — "rejeição/cancelamento de claim já
+      // concluída". Usa `prisma` (não `tx`): o `throw` logo abaixo reverte
+      // esta transação — um log de auditoria escrito com `tx` seria
+      // revertido junto, nunca persistindo o registro da própria negação.
+      await logAudit(prisma, {
+        companyId: existing.companyId,
+        actorUserId: reviewer.id,
+        actorName: reviewer.name,
+        action: "company_claim.invalid_transition",
+        targetType: "CompanyClaimRequest",
+        targetId: claimRequestId,
+        metadata: { attemptedAction: "reject", fromStatus: existing.status },
+      }).catch(() => {});
+      throw new ConflictError("Esta solicitação já foi revisada.");
+    }
 
     await logAudit(tx, {
       companyId: existing.companyId,
@@ -363,7 +407,29 @@ export async function cancelCompanyClaimRequest(params: {
   const existing = await prisma.companyClaimRequest.findFirst({
     where: { id: claimRequestId, requesterUserId: actor.id },
   });
-  if (!existing) throw new NotFoundError("Solicitação de reivindicação não encontrada.");
+  if (!existing) {
+    // Sprint SST 1.4C.1, §11 — "tentativa de manipular claimRequestId de
+    // outro usuário". Só audita quando o id É de uma claim real de OUTRO
+    // usuário (sinal de manipulação genuína) — um id totalmente inexistente
+    // (garbage/typo) não tem companyId para escopar o log e não é
+    // interessante o suficiente para registrar.
+    const anyOwner = await prisma.companyClaimRequest.findUnique({
+      where: { id: claimRequestId },
+      select: { companyId: true },
+    });
+    if (anyOwner) {
+      await logAudit(prisma, {
+        companyId: anyOwner.companyId,
+        actorUserId: actor.id,
+        actorName: actor.name,
+        action: "company_claim.access_denied",
+        targetType: "CompanyClaimRequest",
+        targetId: claimRequestId,
+        metadata: { attemptedAction: "cancel:ownership_violation" },
+      }).catch(() => {});
+    }
+    throw new NotFoundError("Solicitação de reivindicação não encontrada.");
+  }
 
   return prisma.$transaction(async (tx) => {
     await lockCompanyRow(tx, existing.companyId);
@@ -372,7 +438,18 @@ export async function cancelCompanyClaimRequest(params: {
       where: { id: claimRequestId, requesterUserId: actor.id, status: { in: [...ACTIVE_CLAIM_STATUSES] } },
       data: { status: "CANCELLED" },
     });
-    if (count === 0) throw new ConflictError("Esta solicitação já foi revisada ou cancelada.");
+    if (count === 0) {
+      await logAudit(prisma, {
+        companyId: existing.companyId,
+        actorUserId: actor.id,
+        actorName: actor.name,
+        action: "company_claim.invalid_transition",
+        targetType: "CompanyClaimRequest",
+        targetId: claimRequestId,
+        metadata: { attemptedAction: "cancel", fromStatus: existing.status },
+      }).catch(() => {});
+      throw new ConflictError("Esta solicitação já foi revisada ou cancelada.");
+    }
 
     await logAudit(tx, {
       companyId: existing.companyId,
@@ -396,9 +473,9 @@ export type ActiveClaimForUser = {
   company: { id: string; name: string; documentNormalized: string | null };
 };
 
-/** Usada pelo guard central (lib/auth-server.ts) e pela página de
- * acompanhamento (/company-claim/pending) — nunca inclui dados
- * empresariais além do mínimo necessário para a UI de acompanhamento. */
+/** Usada pelo guard central (lib/auth-server.ts) — só considera
+ * PENDING/UNDER_REVIEW (as únicas situações em que o guard deve desviar o
+ * usuário para /company-claim/pending em vez do ForbiddenError genérico). */
 export async function getActiveClaimRequestForUser(userId: string): Promise<ActiveClaimForUser | null> {
   return prisma.companyClaimRequest.findFirst({
     where: { requesterUserId: userId, status: { in: [...ACTIVE_CLAIM_STATUSES] } },
@@ -410,4 +487,55 @@ export async function getActiveClaimRequestForUser(userId: string): Promise<Acti
       company: { select: { id: true, name: true, documentNormalized: true } },
     },
   });
+}
+
+export type ClaimStatusForPage = {
+  id: string;
+  status: string;
+  requestedAt: Date;
+  rejectionReason: string | null;
+  company: { id: string; name: string; documentNormalized: string | null; controlStatus: CompanyControlStatus };
+  /** true só quando existe CompanyMembership ACTIVE de verdade para este
+   * usuário nesta empresa — a página de acompanhamento NUNCA libera o
+   * botão "Entrar na empresa" só porque `status === "APPROVED"" (§9: "não
+   * liberar por causa somente do status do claim"). */
+  hasActiveMembership: boolean;
+};
+
+/**
+ * Usada pela página de acompanhamento (/company-claim/pending) — diferente
+ * de `getActiveClaimRequestForUser`, busca a solicitação mais recente do
+ * usuário em QUALQUER status (inclusive terminais: APPROVED/REJECTED/
+ * CANCELLED/EXPIRED), para que a página consiga mostrar um estado coerente
+ * mesmo quando o usuário chega aqui por um link antigo/direto depois da
+ * solicitação já ter sido resolvida — nunca só um redirect genérico.
+ */
+export async function getMostRecentClaimForPage(userId: string): Promise<ClaimStatusForPage | null> {
+  const claim = await prisma.companyClaimRequest.findFirst({
+    where: { requesterUserId: userId },
+    orderBy: { requestedAt: "desc" },
+    select: {
+      id: true,
+      status: true,
+      requestedAt: true,
+      rejectionReason: true,
+      companyId: true,
+      company: { select: { id: true, name: true, documentNormalized: true, controlStatus: true } },
+    },
+  });
+  if (!claim) return null;
+
+  const membership = await prisma.companyMembership.findUnique({
+    where: { userId_companyId: { userId, companyId: claim.companyId } },
+    select: { status: true },
+  });
+
+  return {
+    id: claim.id,
+    status: claim.status,
+    requestedAt: claim.requestedAt,
+    rejectionReason: claim.rejectionReason,
+    company: claim.company,
+    hasActiveMembership: membership?.status === "ACTIVE",
+  };
 }

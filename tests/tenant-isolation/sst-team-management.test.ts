@@ -74,6 +74,17 @@ async function makeProviderUser(
   return toSessionUser(raw);
 }
 
+/** Cria um User "alvo" (a ser adicionado ao time da consultoria) — mesmo
+ * padrão de makeProviderUser: ancora a companyId legada ANTES de criar o
+ * User, nunca lida com o valor nullable de volta (User.companyId é
+ * nullable desde a Sprint SST 1.4C.1, mas aqui sempre sabemos o valor de
+ * antemão). */
+async function makeTargetUser(label: string) {
+  const anchorCompany = await createTestCompany(`${label}-anchor`);
+  companyIds.push(anchorCompany.id);
+  return createTestUser(anchorCompany.id, label);
+}
+
 function getRequest() {
   return new NextRequest("http://localhost/api/sst/team");
 }
@@ -130,8 +141,7 @@ describe("Sprint Demo Comercial SST 1.0, Parte 13 — gestão da equipe da consu
   it("caso 2: TECHNICIAN não gerencia equipe (POST bloqueado)", async () => {
     const provider = await makeProvider("team-tech-no-manage");
     const tech = await makeProviderUser(provider.id, "team-tech-no-manage-u", "TECHNICIAN");
-    const target = await createTestUser((await createTestCompany("team-tech-target-co")).id, "team-tech-target");
-    companyIds.push(target.companyId);
+    const target = await makeTargetUser("team-tech-target");
 
     loginAs(tech);
     const res = await teamRoute.POST(postRequest({ email: target.email, role: "VIEWER" }));
@@ -141,8 +151,7 @@ describe("Sprint Demo Comercial SST 1.0, Parte 13 — gestão da equipe da consu
   it("caso 2b: VIEWER não gerencia equipe (POST bloqueado)", async () => {
     const provider = await makeProvider("team-viewer-no-manage");
     const viewer = await makeProviderUser(provider.id, "team-viewer-no-manage-u", "VIEWER");
-    const target = await createTestUser((await createTestCompany("team-viewer-target-co")).id, "team-viewer-target");
-    companyIds.push(target.companyId);
+    const target = await makeTargetUser("team-viewer-target");
 
     loginAs(viewer);
     const res = await teamRoute.POST(postRequest({ email: target.email, role: "VIEWER" }));
@@ -153,8 +162,7 @@ describe("Sprint Demo Comercial SST 1.0, Parte 13 — gestão da equipe da consu
     const providerA = await makeProvider("team-body-a");
     const providerB = await makeProvider("team-body-b");
     const ownerA = await makeProviderUser(providerA.id, "team-body-a-owner", "OWNER");
-    const target = await createTestUser((await createTestCompany("team-body-target-co")).id, "team-body-target");
-    companyIds.push(target.companyId);
+    const target = await makeTargetUser("team-body-target");
 
     loginAs(ownerA);
     // Corpo malicioso tentando injetar um providerId de outra consultoria —
@@ -188,8 +196,7 @@ describe("Sprint Demo Comercial SST 1.0, Parte 13 — gestão da equipe da consu
   it("caso 5: adicionar usuário existente cria SstProviderUser ACTIVE com o papel pedido", async () => {
     const provider = await makeProvider("team-add-happy");
     const owner = await makeProviderUser(provider.id, "team-add-happy-owner", "OWNER");
-    const target = await createTestUser((await createTestCompany("team-add-happy-target-co")).id, "team-add-happy-target");
-    companyIds.push(target.companyId);
+    const target = await makeTargetUser("team-add-happy-target");
 
     loginAs(owner);
     const res = await teamRoute.POST(postRequest({ email: target.email, role: "TECHNICIAN" }));
@@ -205,8 +212,7 @@ describe("Sprint Demo Comercial SST 1.0, Parte 13 — gestão da equipe da consu
   it("caso 6: resposta é externamente idêntica para e-mail inexistente e existente", async () => {
     const provider = await makeProvider("team-enum");
     const owner = await makeProviderUser(provider.id, "team-enum-owner", "OWNER");
-    const existingTarget = await createTestUser((await createTestCompany("team-enum-target-co")).id, "team-enum-target");
-    companyIds.push(existingTarget.companyId);
+    const existingTarget = await makeTargetUser("team-enum-target");
 
     loginAs(owner);
     const resMissing = await teamRoute.POST(postRequest({ email: `nao-existe-${Date.now()}@example.test`, role: "VIEWER" }));
@@ -222,8 +228,7 @@ describe("Sprint Demo Comercial SST 1.0, Parte 13 — gestão da equipe da consu
   it("caso 7: adicionar o mesmo usuário duas vezes não duplica o vínculo", async () => {
     const provider = await makeProvider("team-dup");
     const owner = await makeProviderUser(provider.id, "team-dup-owner", "OWNER");
-    const target = await createTestUser((await createTestCompany("team-dup-target-co")).id, "team-dup-target");
-    companyIds.push(target.companyId);
+    const target = await makeTargetUser("team-dup-target");
 
     loginAs(owner);
     await teamRoute.POST(postRequest({ email: target.email, role: "VIEWER" }));

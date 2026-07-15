@@ -135,6 +135,18 @@ export async function resolveClaimDecision(
     select: { id: true },
   });
   if (!approvedClaim) {
+    // Sprint SST 1.4C.1, §11 — "tentativa de executar CONTINUE ou BLOCK sem
+    // claim aprovada". Evento raro por natureza (só alcançável se o guard
+    // de membership upstream tiver um bug), então nunca vira log repetitivo.
+    await logAudit(prisma, {
+      companyId,
+      actorUserId: actor.id,
+      actorName: actor.name,
+      action: "company_claim.access_denied",
+      targetType: "SstProviderCompany",
+      targetId: relationshipId,
+      metadata: { attemptedAction: `resolveClaimDecision:${decision}` },
+    }).catch(() => {});
     throw new ForbiddenError(
       "Esta empresa ainda não teve nenhuma reivindicação aprovada — não é possível decidir sobre consultorias.",
     );

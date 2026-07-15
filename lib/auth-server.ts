@@ -8,6 +8,7 @@ import type { PermissionKey, SystemRole } from "@/lib/permissions";
 import { resolveCompanyContext, type CompanyContextSource } from "@/lib/company-context";
 import { getRequestedCompanyId } from "@/lib/company-context-request";
 import { logInfo, logWarn } from "@/lib/logger";
+import { logAudit } from "@/lib/audit";
 
 // `next/headers` só pode ser importado em Server Components/Route Handlers,
 // então este módulo é implicitamente server-only.
@@ -54,10 +55,16 @@ export class CompanySelectionRequiredError extends Error {
  */
 export class CompanyClaimPendingError extends Error {
   claimRequestId: string;
-  constructor(claimRequestId: string) {
+  companyId: string;
+  requesterUserId: string;
+  requesterName: string;
+  constructor(claimRequestId: string, companyId: string, requesterUserId: string, requesterName: string) {
     super("Existe uma solicitação de reivindicação em análise para este usuário.");
     this.name = "CompanyClaimPendingError";
     this.claimRequestId = claimRequestId;
+    this.companyId = companyId;
+    this.requesterUserId = requesterUserId;
+    this.requesterName = requesterName;
   }
 }
 
@@ -95,7 +102,11 @@ export async function getCurrentCompany(companyId?: string) {
     return prisma.company.findUnique({ where: { id: companyId } });
   }
   const user = await getCurrentUser();
-  if (!user) return null;
+  // Sprint SST 1.4C.1 — `User.companyId` agora é nullable (nunca mais
+  // preenchido até uma CompanyClaimRequest ser aprovada). `null`/ausente
+  // aqui não é um bug — é o estado normal de um usuário com claim pendente
+  // chamando este fallback sem `companyId` explícito.
+  if (!user || !user.companyId) return null;
   return prisma.company.findUnique({ where: { id: user.companyId } });
 }
 
@@ -190,11 +201,11 @@ export async function requireCompany(): Promise<{
   const activeClaim = await prisma.companyClaimRequest.findFirst({
     where: { requesterUserId: user.id, status: { in: ["PENDING", "UNDER_REVIEW"] } },
     orderBy: { requestedAt: "desc" },
-    select: { id: true },
+    select: { id: true, companyId: true },
   });
   if (activeClaim) {
     logInfo("company_context_claim_pending", { userId: user.id, claimRequestId: activeClaim.id });
-    throw new CompanyClaimPendingError(activeClaim.id);
+    throw new CompanyClaimPendingError(activeClaim.id, activeClaim.companyId, user.id, user.name);
   }
 
   logWarn("company_context_no_active_membership", { userId: user.id });
@@ -233,8 +244,39 @@ async function findAuthorizedUserRole(
   });
 }
 
+/**
+ * Sprint SST 1.4C.1, §11 — `company_claim.access_denied` audita
+ * especificamente uma tentativa de OPERAÇÃO empresarial (`requirePermission`/
+ * `requireRole`, sempre por trás de uma API ou ação de página) bloqueada
+ * por claim pendente — nunca a resolução de contexto genérica
+ * (`requireCompany`/`requireCompanyOrDeny` sozinhos, usada por toda
+ * navegação/redirect normal). Evita o log repetitivo que aconteceria se
+ * isto ficasse dentro de `requireCompany()`, chamado a cada página.
+ */
+async function auditClaimPendingAccessDenied(error: CompanyClaimPendingError, attemptedAction: string): Promise<void> {
+  await logAudit(prisma, {
+    companyId: error.companyId,
+    actorUserId: error.requesterUserId,
+    actorName: error.requesterName,
+    action: "company_claim.access_denied",
+    targetType: "CompanyClaimRequest",
+    targetId: error.claimRequestId,
+    metadata: { attemptedAction },
+  }).catch(() => {
+    // Nunca deixa uma falha ao registrar auditoria quebrar o bloqueio de
+    // acesso em si — o ForbiddenError/CompanyClaimPendingError original
+    // sempre é propagado independentemente disto.
+  });
+}
+
 export async function requireRole(role: SystemRole | (string & {})) {
-  const ctx = await requireCompany();
+  let ctx: Awaited<ReturnType<typeof requireCompany>>;
+  try {
+    ctx = await requireCompany();
+  } catch (error) {
+    if (error instanceof CompanyClaimPendingError) await auditClaimPendingAccessDenied(error, `requireRole:${role}`);
+    throw error;
+  }
   const assignment = await findAuthorizedUserRole(ctx.user.id, ctx.companyId, { name: role });
   if (!assignment) {
     throw new ForbiddenError(`Papel "${role}" é necessário para esta ação.`);
@@ -243,7 +285,13 @@ export async function requireRole(role: SystemRole | (string & {})) {
 }
 
 export async function requirePermission(permission: PermissionKey | (string & {})) {
-  const ctx = await requireCompany();
+  let ctx: Awaited<ReturnType<typeof requireCompany>>;
+  try {
+    ctx = await requireCompany();
+  } catch (error) {
+    if (error instanceof CompanyClaimPendingError) await auditClaimPendingAccessDenied(error, `requirePermission:${permission}`);
+    throw error;
+  }
   const assignment = await findAuthorizedUserRole(ctx.user.id, ctx.companyId, {
     permissions: { some: { permission: { key: permission } } },
   });

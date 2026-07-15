@@ -144,10 +144,16 @@ export async function POST(request: Request) {
 
   let userId: string;
   try {
-    const result = await signUpEmailInternal(
-      { name, email, password, companyId: company.id },
-      request.headers,
-    );
+    // Sprint SST 1.4C.1, §4 — nunca mais passa `companyId: company.id` aqui:
+    // até a aprovação da CompanyClaimRequest, o usuário não administra
+    // NENHUMA empresa, e `User.companyId` (preferência legada, nunca
+    // autorização) deve refletir isso ficando `null` — nunca apontar
+    // prematuramente para uma Company que o usuário ainda não tem
+    // permissão de acessar. A associação real, enquanto isso, é
+    // `CompanyClaimRequest.requesterUserId` (já criada logo abaixo).
+    // `approveCompanyClaimRequest` é o único lugar que preenche esta
+    // coluna, depois de criar a CompanyMembership de verdade.
+    const result = await signUpEmailInternal({ name, email, password }, request.headers);
     userId = result.user.id;
   } catch {
     return NextResponse.json(

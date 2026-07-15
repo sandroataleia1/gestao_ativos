@@ -107,9 +107,10 @@ describe("POST /api/register — CNPJ obrigatório (Sprint Comercial SST 1.4)", 
     );
     expect(res.status).toBe(200);
 
-    const user = await prisma.user.findUniqueOrThrow({ where: { email } });
-    createdCompanyIds.push(user.companyId);
-    const company = await prisma.company.findUniqueOrThrow({ where: { id: user.companyId } });
+    // Sprint SST 1.4C.1 — User.companyId não é mais preenchido no registro
+    // (só na aprovação); a Company recém-criada é encontrada pelo CNPJ.
+    const company = await prisma.company.findFirstOrThrow({ where: { documentNormalized: cnpj } });
+    createdCompanyIds.push(company.id);
     expect(company.documentType).toBe("CNPJ");
     expect(company.documentNormalized).toBe(cnpj);
     expect(company.documentOriginal).toBe(formatCnpj(cnpj));
@@ -131,9 +132,8 @@ describe("POST /api/register — CNPJ obrigatório (Sprint Comercial SST 1.4)", 
       }),
     );
     expect(res.status).toBe(200);
-    const user = await prisma.user.findUniqueOrThrow({ where: { email } });
-    createdCompanyIds.push(user.companyId);
-    const company = await prisma.company.findUniqueOrThrow({ where: { id: user.companyId } });
+    const company = await prisma.company.findFirstOrThrow({ where: { documentNormalized: cnpj } });
+    createdCompanyIds.push(company.id);
     expect(company.documentNormalized).toBe(cnpj);
   });
 
@@ -153,8 +153,8 @@ describe("POST /api/register — CNPJ obrigatório (Sprint Comercial SST 1.4)", 
       }),
     );
     expect(res1.status).toBe(200);
-    const user1 = await prisma.user.findUniqueOrThrow({ where: { email: email1 } });
-    createdCompanyIds.push(user1.companyId);
+    const company1 = await prisma.company.findFirstOrThrow({ where: { documentNormalized: cnpj } });
+    createdCompanyIds.push(company1.id);
 
     const companiesBefore = await prisma.company.count({ where: { documentNormalized: cnpj } });
     expect(companiesBefore).toBe(1);
@@ -234,7 +234,9 @@ describe("POST /api/register — CNPJ obrigatório (Sprint Comercial SST 1.4)", 
     expect(companiesWithCnpj).toBe(1);
 
     const user = await prisma.user.findUniqueOrThrow({ where: { email } });
-    expect(user.companyId).toBe(preRegistered.id);
+    // Sprint SST 1.4C.1, §4 — User.companyId permanece null até a
+    // aprovação; nunca aponta prematuramente para a empresa reivindicada.
+    expect(user.companyId).toBeNull();
 
     const membership = await prisma.companyMembership.findUnique({
       where: { userId_companyId: { userId: user.id, companyId: preRegistered.id } },

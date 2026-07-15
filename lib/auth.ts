@@ -105,9 +105,18 @@ export const auth = betterAuth({
   },
   user: {
     additionalFields: {
+      // Sprint SST 1.4C.1 — deixou de ser obrigatório: desde a Sprint SST
+      // 1.4C, um usuário recém-registrado não tem mais nenhuma Company
+      // "sua" até que uma CompanyClaimRequest seja aprovada
+      // (lib/company-claim-request.ts:approveCompanyClaimRequest, único
+      // lugar que agora preenche esta coluna). Continua só uma preferência
+      // legada — nunca autorização (ver lib/company-context.ts) — mas
+      // "preferência ausente" precisa ser um estado real e representável
+      // (null), não mais forçado a apontar para uma empresa que o usuário
+      // ainda não administra.
       companyId: {
         type: "string",
-        required: true,
+        required: false,
         input: true,
       },
       // Coluna `User.active` já existe no schema (default true) mas nunca

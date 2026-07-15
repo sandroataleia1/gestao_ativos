@@ -137,13 +137,21 @@ export type Summary = {
  * tests/setup.ts.
  */
 export async function runBackfill(mode: Mode): Promise<{ summary: Summary; outcomes: Outcome[] }> {
+  // Sprint SST 1.4C.1 — `companyId` é nullable desde esta sprint (nunca mais
+  // preenchido até uma CompanyClaimRequest ser aprovada); o filtro `not: ""`
+  // já exclui `null` na semântica do Postgres (`NULL <> ''` nunca é
+  // verdadeiro), mas o narrowing de tipo do TS não sabe disso — o filter
+  // abaixo só documenta explicitamente essa garantia para o compilador.
   const users = await prisma.user.findMany({
     where: { companyId: { not: "" } },
     select: { id: true, email: true, companyId: true, createdAt: true },
     orderBy: { createdAt: "asc" },
   });
+  const usersWithCompanyId = users.filter(
+    (u): u is typeof u & { companyId: string } => u.companyId !== null,
+  );
 
-  const pairs: LegacyPair[] = users.map((u) => ({
+  const pairs: LegacyPair[] = usersWithCompanyId.map((u) => ({
     userId: u.id,
     userEmail: u.email,
     companyId: u.companyId,

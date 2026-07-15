@@ -140,7 +140,12 @@ export type TestSessionUser = {
   id: string;
   name: string;
   email: string;
-  companyId: string;
+  // Sprint SST 1.4C.1 — nullable desde que User.companyId deixou de ser
+  // preenchido no registro (só approveCompanyClaimRequest preenche, como
+  // preferência legada). Continua nunca sendo autoridade — só uma
+  // preferência revalidada contra CompanyMembership (ver
+  // lib/company-context.ts).
+  companyId: string | null;
   active: boolean;
 };
 
@@ -148,7 +153,7 @@ export function toSessionUser(user: {
   id: string;
   name: string;
   email: string;
-  companyId: string;
+  companyId: string | null;
 }): TestSessionUser {
   return { ...user, active: true };
 }

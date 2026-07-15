@@ -309,8 +309,16 @@ model CompanyClaimRequest {
 
 model User {
   id            String   @id @default(cuid())
-  companyId     String
-  company       Company  @relation(fields: [companyId], references: [id])
+  // Sprint SST 1.4C.1 — nullable desde esta sprint: um usuário recém-
+  // registrado não tem mais nenhuma Company "sua" até que uma
+  // CompanyClaimRequest seja aprovada (lib/company-claim-request.ts). Só
+  // `approveCompanyClaimRequest` preenche esta coluna, e só como preferência
+  // (nunca autorização — CompanyMembership continua sendo a fonte real,
+  // ver lib/company-context.ts). Nunca preenchido silenciosamente para um
+  // usuário multiempresa que já tem uma preferência própria — ver o próprio
+  // approveCompanyClaimRequest.
+  companyId     String?
+  company       Company? @relation(fields: [companyId], references: [id])
   name          String
   email         String   @unique
   emailVerified Boolean  @default(false)

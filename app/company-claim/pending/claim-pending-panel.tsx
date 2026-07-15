@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ClockIcon, LogOutIcon } from "lucide-react";
+import { AlertTriangleIcon, CheckCircle2Icon, ClockIcon, LogOutIcon, XCircleIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { signOut } from "@/lib/auth-client";
@@ -10,11 +10,68 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
-type ClaimStatus = "PENDING" | "UNDER_REVIEW";
+// Sprint SST 1.4C.1, §9 — estados possíveis exibidos por esta página.
+// "DISPUTED" não é um CompanyClaimRequestStatus real (é
+// Company.controlStatus) — page.tsx já resolve isso para o status
+// "efetivo" antes de passar pra cá, então este componente só precisa saber
+// renderizar cada rótulo, nunca reimplementar essa lógica.
+type EffectiveStatus = "PENDING" | "UNDER_REVIEW" | "DISPUTED" | "APPROVED" | "REJECTED" | "CANCELLED" | "EXPIRED";
 
-const STATUS_LABELS: Record<ClaimStatus, string> = {
-  PENDING: "Aguardando análise",
-  UNDER_REVIEW: "Em análise",
+const STATUS_CONFIG: Record<
+  EffectiveStatus,
+  { label: string; message: string; icon: typeof ClockIcon; showCancel: boolean; showEnter: boolean }
+> = {
+  PENDING: {
+    label: "Aguardando análise",
+    message:
+      "Nenhum dado da empresa fica disponível até que a solicitação seja aprovada. Você pode sair a qualquer momento e voltar depois — o retorno traz de volta esta mesma página.",
+    icon: ClockIcon,
+    showCancel: true,
+    showEnter: false,
+  },
+  UNDER_REVIEW: {
+    label: "Em análise",
+    message: "Sua solicitação está sendo analisada. Você pode sair a qualquer momento e voltar depois.",
+    icon: ClockIcon,
+    showCancel: true,
+    showEnter: false,
+  },
+  DISPUTED: {
+    label: "Requer análise adicional",
+    message:
+      "Mais de uma solicitação foi registrada para esta empresa. Nossa equipe vai analisar antes de prosseguir — nenhum dado é liberado enquanto isso.",
+    icon: AlertTriangleIcon,
+    showCancel: true,
+    showEnter: false,
+  },
+  APPROVED: {
+    label: "Aprovada",
+    message: "Sua solicitação foi aprovada e o acesso à empresa já está liberado.",
+    icon: CheckCircle2Icon,
+    showCancel: false,
+    showEnter: true,
+  },
+  REJECTED: {
+    label: "Não aprovada",
+    message: "Sua solicitação não foi aprovada. Entre em contato com o suporte se precisar de mais informações.",
+    icon: XCircleIcon,
+    showCancel: false,
+    showEnter: false,
+  },
+  CANCELLED: {
+    label: "Cancelada",
+    message: "Você cancelou esta solicitação.",
+    icon: XCircleIcon,
+    showCancel: false,
+    showEnter: false,
+  },
+  EXPIRED: {
+    label: "Expirada",
+    message: "Esta solicitação expirou. Entre em contato com o suporte para uma nova tentativa.",
+    icon: ClockIcon,
+    showCancel: false,
+    showEnter: false,
+  },
 };
 
 function formatDate(iso: string) {
@@ -40,13 +97,23 @@ export function ClaimPendingPanel({
   const router = useRouter();
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [isEntering, setIsEntering] = useState(false);
   const [cancelled, setCancelled] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const config = STATUS_CONFIG[claim.status as EffectiveStatus] ?? STATUS_CONFIG.PENDING;
+  const Icon = config.icon;
 
   async function handleSignOut() {
     setIsSigningOut(true);
     await signOut();
     router.push("/login");
+    router.refresh();
+  }
+
+  function handleEnter() {
+    setIsEntering(true);
+    router.push("/dashboard");
     router.refresh();
   }
 
@@ -97,9 +164,9 @@ export function ClaimPendingPanel({
         ) : null}
 
         <div className="flex items-center gap-3">
-          <ClockIcon className="size-8 shrink-0 text-muted-foreground" />
+          <Icon className="size-8 shrink-0 text-muted-foreground" />
           <div>
-            <p className="font-medium">{STATUS_LABELS[claim.status as ClaimStatus] ?? claim.status}</p>
+            <p className="font-medium">{config.label}</p>
             <p className="text-sm text-muted-foreground">Solicitado em {formatDate(claim.requestedAt)}</p>
           </div>
         </div>
@@ -117,24 +184,28 @@ export function ClaimPendingPanel({
           ) : null}
         </dl>
 
-        <p className="text-sm text-muted-foreground">
-          Nenhum dado da empresa fica disponível até que a solicitação seja aprovada. Você pode
-          sair a qualquer momento e voltar depois — o retorno traz de volta esta mesma página.
-        </p>
+        <p className="text-sm text-muted-foreground">{config.message}</p>
 
         <div className="flex flex-wrap gap-2">
+          {config.showEnter ? (
+            <Button onClick={handleEnter} disabled={isEntering}>
+              {isEntering ? "Entrando..." : "Entrar na empresa"}
+            </Button>
+          ) : null}
           <Button variant="outline" onClick={handleSignOut} disabled={isSigningOut}>
             <LogOutIcon />
             {isSigningOut ? "Saindo..." : "Sair"}
           </Button>
-          <Button
-            variant="outline"
-            className="border-destructive text-destructive hover:bg-destructive/10"
-            onClick={handleCancel}
-            disabled={isCancelling}
-          >
-            {isCancelling ? "Cancelando..." : "Cancelar solicitação"}
-          </Button>
+          {config.showCancel ? (
+            <Button
+              variant="outline"
+              className="border-destructive text-destructive hover:bg-destructive/10"
+              onClick={handleCancel}
+              disabled={isCancelling}
+            >
+              {isCancelling ? "Cancelando..." : "Cancelar solicitação"}
+            </Button>
+          ) : null}
         </div>
       </CardContent>
     </Card>
