@@ -72,6 +72,32 @@ export function maskCnpjInput(rawValue: string): string {
   return result;
 }
 
+/** Erro de domínio para entrada de CNPJ inválida — lançado só por
+ * `parseCnpj`. Módulo dependency-free de propósito (sem import de
+ * lib/api-errors.ts): quem chama `parseCnpj` numa rota/serviço decide se
+ * converte isto em `ValidationError` (ou equivalente) para o client. */
+export class InvalidCnpjError extends Error {
+  constructor(message = "Informe um CNPJ válido.") {
+    super(message);
+    this.name = "InvalidCnpjError";
+  }
+}
+
+export type ParsedCnpj = { normalized: string; formatted: string };
+
+/** Normaliza + valida + formata em um único passo — para qualquer fluxo que
+ * precise das duas representações canônicas de uma vez
+ * (`documentNormalized`/`documentOriginal`). Lança `InvalidCnpjError` para
+ * entrada que não seja um CNPJ válido — nunca devolve um valor parcial ou
+ * mascara algo inválido como se fosse válido. */
+export function parseCnpj(value: string | null | undefined): ParsedCnpj {
+  if (!isValidCnpj(value)) {
+    throw new InvalidCnpjError();
+  }
+  const normalized = normalizeCnpj(value);
+  return { normalized, formatted: formatCnpj(normalized) };
+}
+
 /** Constrói um CNPJ com dígitos verificadores válidos a partir de uma base de
  * 12 dígitos — usado por seeds/scripts para gerar CNPJs fictícios porém
  * matematicamente válidos e determinísticos (nunca um CNPJ real conhecido).

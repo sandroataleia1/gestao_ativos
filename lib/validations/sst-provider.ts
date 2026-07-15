@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { cnpjSchema } from "@/lib/validations/cnpj";
+
 export const SST_PROVIDER_ACCESS_LEVEL_VALUES = ["VIEW", "OPERATION", "ADMINISTRATION"] as const;
 export const SST_PROVIDER_LINK_STATUS_UPDATE_VALUES = ["ACTIVE", "SUSPENDED", "REVOKED", "REJECTED"] as const;
 
@@ -34,17 +36,17 @@ export type SstProviderLinkStatusUpdateInput = z.infer<typeof sstProviderLinkSta
 // reconhece os campos abaixo (qualquer campo extra é ignorado pelo Zod por
 // padrão, nunca repassado ao service).
 export const sstCompanyCheckCnpjSchema = z.object({
-  cnpj: z.string().trim().min(1, "Informe o CNPJ."),
+  cnpj: cnpjSchema,
 });
 export type SstCompanyCheckCnpjInput = z.infer<typeof sstCompanyCheckCnpjSchema>;
 
 export const sstCompanyPreRegisterSchema = z.object({
-  cnpj: z.string().trim().min(1, "Informe o CNPJ."),
+  cnpj: cnpjSchema,
   name: z.string().trim().min(1, "Informe o nome da empresa."),
 });
 export type SstCompanyPreRegisterInput = z.infer<typeof sstCompanyPreRegisterSchema>;
 
 export const sstCompanyRequestAccessSchema = z.object({
-  cnpj: z.string().trim().min(1, "Informe o CNPJ."),
+  cnpj: cnpjSchema,
 });
 export type SstCompanyRequestAccessInput = z.infer<typeof sstCompanyRequestAccessSchema>;

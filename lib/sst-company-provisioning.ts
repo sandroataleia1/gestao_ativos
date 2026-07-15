@@ -2,7 +2,8 @@ import { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ConflictError, NotFoundError, ValidationError } from "@/lib/api-errors";
 import { logAudit } from "@/lib/audit";
-import { formatCnpj, isValidCnpj, maskCnpjForLog, normalizeCnpj } from "@/lib/cnpj";
+import { isValidCnpj, maskCnpjForLog, normalizeCnpj } from "@/lib/cnpj";
+import { createCompanyWithCanonicalDocument } from "@/lib/company-creation";
 
 // Sprint Comercial SST 1.4 — pré-cadastro de empresa e solicitação de
 // autorização pelo Portal Consultoria, a partir do CNPJ. Regra central
@@ -108,6 +109,21 @@ async function continueWithExistingCompany(
   if (existingLink) {
     if (existingLink.status === "ACTIVE") return { status: describeActiveLink(existingLink), link: existingLink };
     if (existingLink.status === "PENDING") return { status: "AUTHORIZATION_PENDING", link: existingLink };
+    // Cenário G/H — vínculo SUSPENDED/REVOKED/REJECTED nunca reativa
+    // sozinho. `sst_company.request_access_denied` estava declarado em
+    // lib/audit.ts (AuditAction) mas nunca era efetivamente emitido em
+    // nenhum caminho do código — Sprint SST 1.4B, §16, corrige a lacuna.
+    await logAudit(prisma, {
+      companyId: company.id,
+      actorUserId: actor.id,
+      actorName: actor.name,
+      actorType: "SST_PROVIDER_USER",
+      providerId,
+      action: "sst_company.request_access_denied",
+      targetType: "Company",
+      targetId: company.id,
+      metadata: { reason: "TERMINAL_LINK_STATE", previousStatus: existingLink.status },
+    });
     throw new ConflictError(
       "Este vínculo foi encerrado anteriormente e não pode ser reativado automaticamente. É necessária uma nova solicitação revisada pela empresa.",
     );
@@ -115,6 +131,17 @@ async function continueWithExistingCompany(
 
   if (company.operationalStatus === "SUSPENDED" || company.operationalStatus === "CLOSED") {
     // Mensagem genérica — nunca revela o motivo operacional exato (Cenário H).
+    await logAudit(prisma, {
+      companyId: company.id,
+      actorUserId: actor.id,
+      actorName: actor.name,
+      actorType: "SST_PROVIDER_USER",
+      providerId,
+      action: "sst_company.request_access_denied",
+      targetType: "Company",
+      targetId: company.id,
+      metadata: { reason: "COMPANY_UNAVAILABLE" },
+    });
     throw new ValidationError("Não é possível solicitar autorização para esta empresa no momento.");
   }
 
@@ -213,23 +240,23 @@ export async function preRegisterCompany(
     throw new ValidationError("Informe o nome da empresa.");
   }
   const documentNormalized = normalizeCnpj(input.cnpj);
-  const documentOriginal = formatCnpj(input.cnpj);
 
   try {
     return await prisma.$transaction(async (tx) => {
-      const company = await tx.company.create({
-        data: {
+      // Serviço central (lib/company-creation.ts) — mesma lógica de campos
+      // documentais canônicos usada pelo cadastro público
+      // (app/api/register/route.ts). Roda dentro desta transação para que
+      // Company + SstProviderCompany sejam criados atomicamente.
+      const company = await createCompanyWithCanonicalDocument(
+        {
           name: trimmedName,
-          document: documentOriginal,
-          documentType: "CNPJ",
-          documentOriginal,
-          documentNormalized,
-          operationalStatus: "ACTIVE",
-          controlStatus: "UNCLAIMED",
+          cnpj: input.cnpj,
           origin: "SST_PROVIDER",
+          controlStatus: "UNCLAIMED",
           createdByProviderId: providerId,
         },
-      });
+        tx,
+      );
       const link = await tx.sstProviderCompany.create({
         data: {
           providerId,
@@ -255,7 +282,9 @@ export async function preRegisterCompany(
       return { created: true, company: { id: company.id, name: company.name }, link: { id: link.id } };
     });
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    // createCompanyWithCanonicalDocument já converte P2002 em ConflictError
+    // semântico — nunca deixa o erro bruto do Prisma vazar até aqui.
+    if (error instanceof ConflictError) {
       const raced = await prisma.company.findFirst({
         where: { documentType: "CNPJ", documentNormalized },
         select: { id: true, name: true, operationalStatus: true },

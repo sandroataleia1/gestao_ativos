@@ -14,6 +14,7 @@
     "db:seed-sst-demo": "tsx prisma/seed-sst-demo.ts",
     "db:reset-sst-demo": "tsx prisma/reset-sst-demo.ts && tsx prisma/seed-sst-demo.ts",
     "diagnose:documents": "tsx scripts/diagnose-company-documents.ts",
+    "diagnose:company-documents": "tsx scripts/diagnose-company-documents.ts",
     "diagnose:pre-m2": "tsx scripts/diagnose-pre-m2.ts",
     "backfill:company-memberships": "tsx scripts/backfill-company-memberships.ts",
     "backfill:company-documents": "tsx scripts/backfill-company-documents.ts",

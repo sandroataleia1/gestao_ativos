@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { formatCnpj, isValidCnpj, maskCnpjForLog, normalizeCnpj, withValidCheckDigits } from "@/lib/cnpj";
+import {
+  InvalidCnpjError,
+  formatCnpj,
+  isValidCnpj,
+  maskCnpjForLog,
+  normalizeCnpj,
+  parseCnpj,
+  withValidCheckDigits,
+} from "@/lib/cnpj";
 
 // Sprint Comercial SST 1.4 — helpers de CNPJ. "11.222.333/0001-81" é o CNPJ
 // fictício mas matematicamente válido já usado como exemplo padrão em
@@ -38,17 +46,33 @@ describe("isValidCnpj", () => {
     expect(isValidCnpj("112223330001811")).toBe(false);
   });
 
-  it("rejeita sequências de dígitos repetidos", () => {
-    expect(isValidCnpj("00000000000000")).toBe(false);
-    expect(isValidCnpj("11111111111111")).toBe(false);
+  it("rejeita todas as 10 sequências de dígitos repetidos (0..9)", () => {
+    for (let d = 0; d <= 9; d++) {
+      expect(isValidCnpj(String(d).repeat(14))).toBe(false);
+    }
   });
 
-  it("rejeita dígitos verificadores incorretos", () => {
-    expect(isValidCnpj("11222333000180")).toBe(false); // último dígito trocado
-    expect(isValidCnpj("11222333000199")).toBe(false);
+  it("rejeita primeiro dígito verificador inválido", () => {
+    // KNOWN_VALID_DIGITS = "11222333000181" — posição 12 (0-indexed) é o
+    // primeiro DV ("8"); trocar só ele para "0" quebra já o primeiro cálculo.
+    expect(isValidCnpj("11222333000101")).toBe(false);
   });
 
-  it("rejeita nulo/vazio", () => {
+  it("rejeita segundo dígito verificador inválido (primeiro OK)", () => {
+    // Mesma base + primeiro DV correto ("8"), segundo DV trocado.
+    expect(isValidCnpj("11222333000180")).toBe(false);
+  });
+
+  it("rejeita menos de 14 dígitos", () => {
+    expect(isValidCnpj("1122233300018")).toBe(false); // 13 dígitos
+    expect(isValidCnpj("123")).toBe(false);
+  });
+
+  it("rejeita mais de 14 dígitos", () => {
+    expect(isValidCnpj("112223330001811")).toBe(false); // 15 dígitos
+  });
+
+  it("rejeita nulo/vazio/undefined", () => {
     expect(isValidCnpj(null)).toBe(false);
     expect(isValidCnpj(undefined)).toBe(false);
     expect(isValidCnpj("")).toBe(false);
@@ -64,9 +88,30 @@ describe("formatCnpj", () => {
     expect(formatCnpj(KNOWN_VALID_MASKED)).toBe(KNOWN_VALID_MASKED);
   });
 
-  it("devolve o valor original (trim) quando não há 14 dígitos", () => {
+  it("devolve o valor original (trim) quando não há 14 dígitos — nunca mascara parcialmente um valor inválido como se fosse válido", () => {
     expect(formatCnpj("abc")).toBe("abc");
     expect(formatCnpj("  123  ")).toBe("123");
+  });
+});
+
+describe("parseCnpj", () => {
+  it("normaliza, valida e formata em um único passo para um CNPJ válido", () => {
+    expect(parseCnpj(KNOWN_VALID_MASKED)).toEqual({ normalized: KNOWN_VALID_DIGITS, formatted: KNOWN_VALID_MASKED });
+    expect(parseCnpj(KNOWN_VALID_DIGITS)).toEqual({ normalized: KNOWN_VALID_DIGITS, formatted: KNOWN_VALID_MASKED });
+  });
+
+  it("entrada externa (ex.: valor já normalizado por engano no client) não muda o resultado — servidor sempre recalcula", () => {
+    const clientClaimedNormalized = "00000000000000"; // valor forjado/errado vindo do client
+    expect(() => parseCnpj(clientClaimedNormalized)).toThrow(InvalidCnpjError);
+    expect(parseCnpj(KNOWN_VALID_MASKED).normalized).toBe(KNOWN_VALID_DIGITS);
+  });
+
+  it("lança InvalidCnpjError para entrada inválida — nunca devolve um valor parcial", () => {
+    expect(() => parseCnpj("123")).toThrow(InvalidCnpjError);
+    expect(() => parseCnpj("00000000000000")).toThrow(InvalidCnpjError);
+    expect(() => parseCnpj(null)).toThrow(InvalidCnpjError);
+    expect(() => parseCnpj(undefined)).toThrow(InvalidCnpjError);
+    expect(() => parseCnpj("")).toThrow(InvalidCnpjError);
   });
 });
 

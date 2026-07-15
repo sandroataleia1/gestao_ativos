@@ -1,21 +1,27 @@
 import "dotenv/config";
 
 import { prisma } from "@/lib/prisma";
-import { isValidCnpj, normalizeCnpj } from "@/lib/cnpj";
+import { isValidCnpj, maskCnpjForLog, normalizeCnpj } from "@/lib/cnpj";
 
 /**
- * Diagnóstico SOMENTE-LEITURA do campo `Company.document` (CNPJ).
+ * Diagnóstico SOMENTE-LEITURA dos documentos (CNPJ) das empresas — campo
+ * legado `Company.document` e os campos canônicos `documentType`/
+ * `documentOriginal`/`documentNormalized` (Sprint SST 1.4A, §8).
  *
- * Objetivo: dar visibilidade completa do estado atual dos documentos das
- * empresas ANTES de qualquer decisão sobre normalização/unicidade (Migration
- * M1 e a futura constraint única — ver docs/adr/ADR-001). Este script NUNCA
- * escreve no banco: não faz update, insert, delete nem migração. É seguro
- * rodar em qualquer ambiente (dev/homolog/prod).
+ * Objetivo: dar visibilidade completa do estado atual dos documentos ANTES
+ * de qualquer decisão sobre constraint/migration adicional. Este script
+ * NUNCA escreve no banco: não faz update, insert, delete nem migração. É
+ * seguro rodar em qualquer ambiente (dev/homolog/prod).
+ *
+ * Nunca imprime o CNPJ completo (§17/§8 — "nunca registrar CNPJ integral em
+ * logs comuns") — toda linha de detalhe usa `maskCnpjForLog` (mantém só os
+ * 2 primeiros e 2 últimos dígitos, mascarando o resto), mesmo na saída --json.
  *
  * Uso:
- *   npx tsx scripts/diagnose-company-documents.ts            # saída legível
- *   npx tsx scripts/diagnose-company-documents.ts --json     # saída JSON
- *   npm run diagnose:documents                               # atalho (package.json)
+ *   npx tsx scripts/diagnose-company-documents.ts              # saída legível
+ *   npx tsx scripts/diagnose-company-documents.ts --json       # saída JSON
+ *   npm run diagnose:documents                                  # atalho (package.json)
+ *   npm run diagnose:company-documents                          # alias (Sprint SST 1.4A, §8)
  *   npm run diagnose:documents -- --json
  *
  * Código de saída:
@@ -26,12 +32,32 @@ import { isValidCnpj, normalizeCnpj } from "@/lib/cnpj";
  * resultado esperado do diagnóstico, então o processo encerra com 0.
  */
 
+// --- Classificação de dado demonstrativo -------------------------------------
+// Mesmos padrões de scripts/backfill-company-documents.ts — nomes que só
+// existem porque foram criados manualmente durante sprints de
+// desenvolvimento/teste deste projeto, nunca por um usuário real via
+// /register, ou pelos seeds oficiais (prisma/seed.ts, prisma/seed-sst-demo.ts).
+const DEMO_NAME_PATTERNS = [
+  /^Empresa Demo$/,
+  /\(Demo SST\)$/,
+  /^Consultoria Segura SST — Acesso ao Portal/,
+  /^QA Empresa/,
+  /^Empresa Teste/,
+  /^Empresa Mascara Teste$/,
+  /^Empresa Com Celular$/,
+  /^Empresa Vazia/,
+  /^Nova Empresa/,
+  /^Empresa Stock/,
+  /^Empresa [A-Z] Teste$/,
+];
+
+function looksLikeDemoData(name: string): boolean {
+  return DEMO_NAME_PATTERNS.some((pattern) => pattern.test(name));
+}
+
 // --- Utilidades puras (sem I/O) ---------------------------------------------
 // Normalização/validação de dígito verificador reaproveitadas de
 // lib/cnpj.ts (Sprint Comercial SST 1.4) — antes duplicadas aqui.
-
-/** Caracteres de máscara "esperados" de um CNPJ formatado: . / - e espaço. */
-const MASK_CHARS = /[.\-/\s]/g;
 
 /** true se o valor contém algum caractere de formatação de máscara. */
 function hasMaskChars(value: string): boolean {
@@ -44,17 +70,41 @@ function hasMaskChars(value: string): boolean {
  * que não é apenas um CNPJ mascarado.
  */
 function hasUnexpectedChars(value: string): boolean {
-  const stripped = value.replace(/\d/g, "").replace(MASK_CHARS, "");
+  const stripped = value.replace(/\d/g, "").replace(/[.\-/\s]/g, "");
   return stripped.length > 0;
 }
 
 // --- Tipos do relatório ------------------------------------------------------
 
-type CompanyRow = { id: string; name: string; document: string | null };
+type CompanyRow = {
+  id: string;
+  name: string;
+  document: string | null;
+  documentType: string | null;
+  documentOriginal: string | null;
+  documentNormalized: string | null;
+};
+
+/** Versão da linha segura para exibir/serializar — nunca o CNPJ completo. */
+type MaskedCompanyRow = {
+  id: string;
+  name: string;
+  documentMasked: string;
+  documentTypeSet: boolean;
+};
+
+function maskRow(c: CompanyRow): MaskedCompanyRow {
+  return {
+    id: c.id,
+    name: c.name,
+    documentMasked: maskCnpjForLog(c.document),
+    documentTypeSet: c.documentType !== null,
+  };
+}
 
 type ConflictGroup = {
-  key: string;
-  companies: CompanyRow[];
+  keyMasked: string;
+  companies: MaskedCompanyRow[];
 };
 
 type Report = {
@@ -63,12 +113,19 @@ type Report = {
   totals: {
     totalCompanies: number;
     withoutDocument: number;
+    withoutDocumentType: number;
+    validCnpj: number;
+    invalidCnpj: number;
     withMask: number;
+    withoutMask: number;
     withNonNumericChars: number;
     wrongDigitCount: number;
     invalidCheckDigits: number;
+    fieldDivergence: number;
     exactDuplicateGroups: number;
     normalizedDuplicateGroups: number;
+    likelyDemoData: number;
+    likelyNotDemoData: number;
   };
   exactDuplicates: ConflictGroup[];
   normalizedDuplicates: ConflictGroup[];
@@ -93,12 +150,19 @@ function describeDatabaseTarget(): string {
   }
 }
 
-function buildReport(companies: CompanyRow[]): Report {
+function buildReport(companies: CompanyRow[]) {
   const withoutDocument: CompanyRow[] = [];
+  const withoutDocumentType: CompanyRow[] = [];
+  const validCnpj: CompanyRow[] = [];
+  const invalidCnpj: CompanyRow[] = [];
   const withMask: CompanyRow[] = [];
+  const withoutMask: CompanyRow[] = [];
   const withNonNumericChars: CompanyRow[] = [];
   const wrongDigitCount: CompanyRow[] = [];
   const invalidCheckDigits: CompanyRow[] = [];
+  const fieldDivergence: CompanyRow[] = [];
+  const likelyDemoData: CompanyRow[] = [];
+  const likelyNotDemoData: CompanyRow[] = [];
 
   const exactMap = new Map<string, CompanyRow[]>();
   const normalizedMap = new Map<string, CompanyRow[]>();
@@ -106,19 +170,43 @@ function buildReport(companies: CompanyRow[]): Report {
   for (const company of companies) {
     const raw = (company.document ?? "").trim();
 
+    if (looksLikeDemoData(company.name)) likelyDemoData.push(company);
+    else likelyNotDemoData.push(company);
+
+    if (company.documentType === null) withoutDocumentType.push(company);
+
+    // Divergência entre document/documentOriginal/documentNormalized —
+    // qualquer inconsistência entre os três indica que o backfill/criação
+    // não sincronizou os campos corretamente.
+    if (company.documentType !== null) {
+      const normalizedFromOriginal = normalizeCnpj(company.documentOriginal);
+      const divergesFromLegacy = raw !== "" && company.documentOriginal !== null && raw !== company.documentOriginal;
+      const divergesNormalized =
+        company.documentNormalized !== null && normalizedFromOriginal !== company.documentNormalized;
+      const missingCanonicalFields = company.documentOriginal === null || company.documentNormalized === null;
+      if (divergesFromLegacy || divergesNormalized || missingCanonicalFields) {
+        fieldDivergence.push(company);
+      }
+    }
+
     if (raw === "") {
       withoutDocument.push(company);
       continue; // vazio não participa das demais checagens nem de duplicidade
     }
 
     if (hasMaskChars(raw)) withMask.push(company);
+    else withoutMask.push(company);
     if (hasUnexpectedChars(raw)) withNonNumericChars.push(company);
 
     const digits = normalizeCnpj(raw);
     if (digits.length !== 14) {
       wrongDigitCount.push(company);
+      invalidCnpj.push(company);
     } else if (!isValidCnpj(digits)) {
       invalidCheckDigits.push(company);
+      invalidCnpj.push(company);
+    } else {
+      validCnpj.push(company);
     }
 
     // Duplicidade exata: valor cru idêntico (case-sensitive, como está no banco).
@@ -135,48 +223,55 @@ function buildReport(companies: CompanyRow[]): Report {
   const toGroups = (map: Map<string, CompanyRow[]>): ConflictGroup[] =>
     [...map.entries()]
       .filter(([, rows]) => rows.length > 1)
-      .map(([key, rows]) => ({ key, companies: rows }))
+      .map(([key, rows]) => ({ keyMasked: maskCnpjForLog(key), companies: rows.map(maskRow) }))
       .sort((a, b) => b.companies.length - a.companies.length);
 
   const exactDuplicates = toGroups(exactMap);
   const normalizedDuplicates = toGroups(normalizedMap);
 
-  return {
+  const report: Report = {
     generatedAt: new Date().toISOString(),
     database: describeDatabaseTarget(),
     totals: {
       totalCompanies: companies.length,
       withoutDocument: withoutDocument.length,
+      withoutDocumentType: withoutDocumentType.length,
+      validCnpj: validCnpj.length,
+      invalidCnpj: invalidCnpj.length,
       withMask: withMask.length,
+      withoutMask: withoutMask.length,
       withNonNumericChars: withNonNumericChars.length,
       wrongDigitCount: wrongDigitCount.length,
       invalidCheckDigits: invalidCheckDigits.length,
+      fieldDivergence: fieldDivergence.length,
       exactDuplicateGroups: exactDuplicates.length,
       normalizedDuplicateGroups: normalizedDuplicates.length,
+      likelyDemoData: likelyDemoData.length,
+      likelyNotDemoData: likelyNotDemoData.length,
     },
     exactDuplicates,
     normalizedDuplicates,
-    // Listas detalhadas anexadas fora do tipo estrito para a saída legível/JSON
-    ...( {
-      _details: {
-        withoutDocument,
-        withMask,
-        withNonNumericChars,
-        wrongDigitCount,
-        invalidCheckDigits,
-      },
-    } as unknown as object),
-  } as Report & { _details: Record<string, CompanyRow[]> };
+  };
+
+  const details = {
+    withoutDocument: withoutDocument.map(maskRow),
+    withoutDocumentType: withoutDocumentType.map(maskRow),
+    invalidCnpj: invalidCnpj.map(maskRow),
+    fieldDivergence: fieldDivergence.map(maskRow),
+    likelyDemoData: likelyDemoData.map(maskRow),
+    likelyNotDemoData: likelyNotDemoData.map(maskRow),
+  };
+
+  return { report, details };
 }
 
 // --- Renderização ------------------------------------------------------------
 
-function fmtCompany(c: CompanyRow): string {
-  const doc = c.document === null ? "(null)" : `"${c.document}"`;
-  return `  - ${c.id}  |  ${c.name}  |  ${doc}`;
+function fmtCompany(c: MaskedCompanyRow): string {
+  return `  - ${c.id}  |  ${c.name}  |  ${c.documentMasked}${c.documentTypeSet ? "" : "  (documentType ausente)"}`;
 }
 
-function renderHuman(report: Report & { _details: Record<string, CompanyRow[]> }): string {
+function renderHuman(report: Report, details: Record<string, MaskedCompanyRow[]>): string {
   const t = report.totals;
   const lines: string[] = [];
   lines.push("=".repeat(72));
@@ -188,31 +283,37 @@ function renderHuman(report: Report & { _details: Record<string, CompanyRow[]> }
   lines.push("Resumo:");
   lines.push(`  Total de empresas ............................... ${t.totalCompanies}`);
   lines.push(`  Sem documento (null/vazio) ...................... ${t.withoutDocument}`);
-  lines.push(`  Com máscara (. / -) ............................. ${t.withMask}`);
+  lines.push(`  Sem documentType ................................ ${t.withoutDocumentType}`);
+  lines.push(`  CNPJ válido ...................................... ${t.validCnpj}`);
+  lines.push(`  CNPJ inválido .................................... ${t.invalidCnpj}`);
+  lines.push(`    (dos quais com quantidade != 14 dígitos) ...... ${t.wrongDigitCount}`);
+  lines.push(`    (dos quais com dígitos verificadores errados) . ${t.invalidCheckDigits}`);
+  lines.push(`  Documento com máscara ............................ ${t.withMask}`);
+  lines.push(`  Documento sem máscara ............................ ${t.withoutMask}`);
   lines.push(`  Com caracteres não-numéricos inesperados ........ ${t.withNonNumericChars}`);
-  lines.push(`  Com quantidade != 14 dígitos .................... ${t.wrongDigitCount}`);
-  lines.push(`  Com dígitos verificadores inválidos ............. ${t.invalidCheckDigits}`);
+  lines.push(`  Divergência entre document/documentOriginal/documentNormalized . ${t.fieldDivergence}`);
   lines.push(`  Grupos de duplicidade exata ..................... ${t.exactDuplicateGroups}`);
   lines.push(`  Grupos de duplicidade após normalização ......... ${t.normalizedDuplicateGroups}`);
+  lines.push(`  Possível dado demonstrativo ...................... ${t.likelyDemoData}`);
+  lines.push(`  Possível dado NÃO demonstrativo (revisar manualmente se algo aqui for inválido) . ${t.likelyNotDemoData}`);
   lines.push("");
 
-  const section = (title: string, rows: CompanyRow[]) => {
+  const section = (title: string, rows: MaskedCompanyRow[]) => {
     if (rows.length === 0) return;
     lines.push(`${title} (${rows.length}):`);
     for (const row of rows) lines.push(fmtCompany(row));
     lines.push("");
   };
 
-  section("Empresas SEM documento", report._details.withoutDocument);
-  section("Empresas com máscara", report._details.withMask);
-  section("Empresas com caracteres não-numéricos inesperados", report._details.withNonNumericChars);
-  section("Empresas com quantidade de dígitos != 14", report._details.wrongDigitCount);
-  section("Empresas com dígitos verificadores inválidos", report._details.invalidCheckDigits);
+  section("Empresas SEM documento", details.withoutDocument);
+  section("Empresas SEM documentType", details.withoutDocumentType);
+  section("Empresas com CNPJ inválido", details.invalidCnpj);
+  section("Empresas com divergência entre campos documentais", details.fieldDivergence);
 
   if (report.exactDuplicates.length > 0) {
     lines.push(`Duplicidades EXATAS (mesmo valor cru) — ${report.exactDuplicates.length} grupo(s):`);
     for (const group of report.exactDuplicates) {
-      lines.push(`  valor "${group.key}" aparece ${group.companies.length}x:`);
+      lines.push(`  valor "${group.keyMasked}" aparece ${group.companies.length}x:`);
       for (const row of group.companies) lines.push(fmtCompany(row));
     }
     lines.push("");
@@ -223,13 +324,13 @@ function renderHuman(report: Report & { _details: Record<string, CompanyRow[]> }
       `Duplicidades APÓS NORMALIZAÇÃO (mesmos 14 dígitos) — ${report.normalizedDuplicates.length} grupo(s):`,
     );
     for (const group of report.normalizedDuplicates) {
-      lines.push(`  dígitos "${group.key}" aparecem ${group.companies.length}x:`);
+      lines.push(`  dígitos "${group.keyMasked}" aparecem ${group.companies.length}x:`);
       for (const row of group.companies) lines.push(fmtCompany(row));
     }
     lines.push("");
   }
 
-  lines.push("Nenhum dado foi modificado. Diagnóstico somente-leitura.");
+  lines.push("Nenhum dado foi modificado. Diagnóstico somente-leitura. CNPJ sempre mascarado acima.");
   return lines.join("\n");
 }
 
@@ -239,21 +340,21 @@ async function main() {
   const asJson = process.argv.includes("--json");
 
   const companies = await prisma.company.findMany({
-    select: { id: true, name: true, document: true },
+    select: { id: true, name: true, document: true, documentType: true, documentOriginal: true, documentNormalized: true },
     orderBy: { createdAt: "asc" },
   });
 
-  const report = buildReport(companies) as Report & { _details: Record<string, CompanyRow[]> };
+  const { report, details } = buildReport(companies);
 
   if (asJson) {
-    // No JSON, expomos os detalhes junto — mesma informação da saída legível.
+    // Mesmo no JSON, todo CNPJ é mascarado — nunca o valor completo (§17).
     console.log(
       JSON.stringify(
         {
           generatedAt: report.generatedAt,
           database: report.database,
           totals: report.totals,
-          details: report._details,
+          details,
           exactDuplicates: report.exactDuplicates,
           normalizedDuplicates: report.normalizedDuplicates,
         },
@@ -262,7 +363,7 @@ async function main() {
       ),
     );
   } else {
-    console.log(renderHuman(report));
+    console.log(renderHuman(report, details));
   }
 }
 

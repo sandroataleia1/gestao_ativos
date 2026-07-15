@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 
-import { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { signUpEmailInternal } from "@/lib/auth";
 import { SYSTEM_ROLES } from "@/lib/permissions";
@@ -8,7 +7,9 @@ import { provisionDefaultRolesForCompany } from "@/lib/rbac-provisioning";
 import { provisionDefaultAssetStatusesAndConditions } from "@/lib/asset-lookup-provisioning";
 import { provisionDefaultStockSetup } from "@/lib/stock-setup-provisioning";
 import { isValidBrazilianMobilePhone, maskBrazilianMobilePhone } from "@/lib/phone-mask";
-import { formatCnpj, isValidCnpj, normalizeCnpj } from "@/lib/cnpj";
+import { isValidCnpj } from "@/lib/cnpj";
+import { createCompanyWithCanonicalDocument, findCompanyByCnpj } from "@/lib/company-creation";
+import { ConflictError } from "@/lib/api-errors";
 import { logAudit } from "@/lib/audit";
 
 const MIN_PASSWORD_LENGTH = 8;
@@ -68,8 +69,6 @@ export async function POST(request: Request) {
   if (!isValidCnpj(cnpjInput)) {
     return NextResponse.json({ error: "Informe um CNPJ válido." }, { status: 400 });
   }
-  const documentNormalized = normalizeCnpj(cnpjInput);
-  const documentOriginal = formatCnpj(cnpjInput);
   // Celular é opcional — mas se informado, precisa ser um celular
   // brasileiro válido (nunca confia só na máscara aplicada no client).
   if (phoneInput && !isValidBrazilianMobilePhone(phoneInput)) {
@@ -88,10 +87,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const existingCompany = await prisma.company.findFirst({
-    where: { documentType: "CNPJ", documentNormalized },
-    select: { id: true, name: true, controlStatus: true },
-  });
+  const existingCompany = await findCompanyByCnpj(cnpjInput);
 
   // CLAIMED (já tem dono real), CLAIM_PENDING (outra reivindicação em
   // andamento) ou DISPUTED — nunca reutilizado, nunca revela o motivo exato.
@@ -109,16 +105,20 @@ export async function POST(request: Request) {
     company = existingCompany;
   } else {
     try {
-      company = await prisma.company.create({
-        data: { name: companyName, phone, document: documentOriginal, documentType: "CNPJ", documentOriginal, documentNormalized },
+      // lib/company-creation.ts — mesmo serviço central usado pelo
+      // pré-cadastro da consultoria (lib/sst-company-provisioning.ts); a
+      // checagem acima já cobre o caso comum, a constraint única
+      // (documentType, documentNormalized) é a fonte final de verdade
+      // contra corrida (duas requisições de registro com o mesmo CNPJ ao
+      // mesmo tempo) — ConflictError vira a mesma mensagem segura.
+      company = await createCompanyWithCanonicalDocument({
+        name: companyName,
+        cnpj: cnpjInput,
+        origin: "SELF_REGISTRATION",
+        phone,
       });
     } catch (error) {
-      // Cinturão de segurança contra corrida (duas requisições de registro
-      // com o mesmo CNPJ ao mesmo tempo) — a checagem acima já cobre o caso
-      // comum, isto pega só a janela entre o SELECT e o INSERT. A
-      // constraint única (documentType, documentNormalized) é a fonte
-      // final de verdade.
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      if (error instanceof ConflictError) {
         return NextResponse.json({ error: CNPJ_ALREADY_REGISTERED_MESSAGE }, { status: 409 });
       }
       throw error;

@@ -133,6 +133,19 @@ const LINK_STATUS_ACTION = {
   REJECTED: "sst_provider.reject",
 } as const;
 
+// Sprint SST 1.4B, §4 — matriz de transições permitidas. Antes desta sprint
+// a única guarda era "REVOKED/REJECTED nunca aceitam PATCH" (estados
+// terminais), o que deixava passar transições sem sentido como PENDING ->
+// SUSPENDED ou PENDING -> REVOKED direto pela API (pulando a aprovação).
+// PENDING só aceita ACTIVE (aprovar) ou REJECTED (recusar); ACTIVE/SUSPENDED
+// podem transitar entre si e para REVOKED; REVOKED/REJECTED são terminais
+// (guarda já existente acima, mantida).
+const ALLOWED_STATUS_TRANSITIONS: Record<string, readonly SstProviderLinkStatusUpdateInput["status"][]> = {
+  PENDING: ["ACTIVE", "REJECTED"],
+  ACTIVE: ["SUSPENDED", "REVOKED"],
+  SUSPENDED: ["ACTIVE", "REVOKED"],
+};
+
 /** Autoriza/suspende/revoga/recusa um vínculo — sempre com ownership check
  * (id + companyId) antes de agir. Registra a ação de audit correspondente
  * ao novo status (`sst_provider.approve`/`suspend`/`revoke`/`reject`).
@@ -166,9 +179,25 @@ export async function updateProviderLinkStatus(
     );
   }
 
+  const allowedNextStatuses = ALLOWED_STATUS_TRANSITIONS[existing.status] ?? [];
+  if (!allowedNextStatuses.includes(input.status)) {
+    throw new ValidationError(
+      `Não é possível alterar um vínculo de "${existing.status}" para "${input.status}".`,
+    );
+  }
+
   return prisma.$transaction(async (tx) => {
-    const link = await tx.sstProviderCompany.update({
-      where: { id: linkId },
+    // Sprint SST 1.4B, §7/§9 — o `existing.status` acima foi lido FORA desta
+    // transação; duas chamadas concorrentes sobre o MESMO vínculo (ex.:
+    // duplo clique em "Autorizar", ou aprovar e recusar quase ao mesmo
+    // tempo em duas abas) poderiam ambas passar pela validação de transição
+    // com o mesmo status antigo e ambas aplicarem sua mudança em sequência.
+    // `updateMany` com `status: existing.status` no WHERE faz o Postgres
+    // decidir atomicamente: só a primeira a commitar de fato muda o
+    // registro; a segunda vê `count: 0` e recebe um erro amigável em vez de
+    // sobrescrever silenciosamente a decisão já aplicada.
+    const { count } = await tx.sstProviderCompany.updateMany({
+      where: { id: linkId, status: existing.status },
       data: {
         status: input.status,
         ...(input.status === "ACTIVE"
@@ -186,6 +215,14 @@ export async function updateProviderLinkStatus(
           ? { companyReviewedAt: new Date(), companyReviewedByUserId: actor.id }
           : {}),
       },
+    });
+    if (count === 0) {
+      throw new ConflictError(
+        "Este vínculo já foi alterado por outra requisição. Recarregue a página e tente novamente.",
+      );
+    }
+    const link = await tx.sstProviderCompany.findUniqueOrThrow({
+      where: { id: linkId },
       include: providerLinkInclude,
     });
 
