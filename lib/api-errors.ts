@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError, flattenError } from "zod";
 
-import { AuthError, CompanySelectionRequiredError, ForbiddenError } from "@/lib/auth-server";
+import { AuthError, CompanyClaimPendingError, CompanySelectionRequiredError, ForbiddenError } from "@/lib/auth-server";
 import { Prisma } from "@/app/generated/prisma/client";
 import { captureException } from "@/lib/monitoring";
 import { logError } from "@/lib/logger";
@@ -50,6 +50,13 @@ export function handleApiError(error: unknown) {
       { code: "COMPANY_SELECTION_REQUIRED", activeMembershipCount: error.activeMembershipCount },
       { status: 409 },
     );
+  }
+  // Sprint SST 1.4C — código estável distinto de ForbiddenError, mesmo
+  // espírito de COMPANY_SELECTION_REQUIRED: nunca revela dados da Company
+  // (nem o nome), só que existe uma solicitação em análise para este
+  // usuário. Clientes podem redirecionar para /company-claim/pending.
+  if (error instanceof CompanyClaimPendingError) {
+    return NextResponse.json({ code: "CLAIM_PENDING" }, { status: 403 });
   }
   if (error instanceof ForbiddenError) {
     return NextResponse.json({ error: error.message }, { status: 403 });

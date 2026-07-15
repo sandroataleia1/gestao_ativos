@@ -24,6 +24,9 @@ afterAll(async () => {
   const users = await prisma.user.findMany({ where: { email: { in: createdUserEmails } } });
   const userIds = users.map((u) => u.id);
   if (userIds.length > 0) {
+    // CompanyClaimRequest.requesterUserId usa onDelete: Restrict (Sprint SST
+    // 1.4C) — precisa sair antes do User, senão o DELETE falha com FK.
+    await prisma.companyClaimRequest.deleteMany({ where: { requesterUserId: { in: userIds } } });
     await prisma.companyMembership.deleteMany({ where: { userId: { in: userIds } } });
     await prisma.userRole.deleteMany({ where: { userId: { in: userIds } } });
     await prisma.account.deleteMany({ where: { userId: { in: userIds } } });
@@ -220,8 +223,11 @@ describe("POST /api/register — CNPJ obrigatório (Sprint Comercial SST 1.4)", 
       }),
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; claimPending: boolean };
-    expect(body.claimPending).toBe(true);
+    const body = (await res.json()) as { ok: boolean; status: string };
+    // Sprint SST 1.4C — nunca mais concede acesso automático a partir do
+    // CNPJ; a resposta agora é sempre CLAIM_REVIEW_REQUIRED, e nenhuma
+    // CompanyMembership é criada aqui (só uma CompanyClaimRequest PENDING).
+    expect(body.status).toBe("CLAIM_REVIEW_REQUIRED");
 
     // Nunca cria uma segunda Company — o usuário é criado sobre a MESMA empresa.
     const companiesWithCnpj = await prisma.company.count({ where: { documentNormalized: cnpj } });
@@ -233,7 +239,13 @@ describe("POST /api/register — CNPJ obrigatório (Sprint Comercial SST 1.4)", 
     const membership = await prisma.companyMembership.findUnique({
       where: { userId_companyId: { userId: user.id, companyId: preRegistered.id } },
     });
-    expect(membership?.status).toBe("ACTIVE");
+    expect(membership).toBeNull();
+
+    const claim = await prisma.companyClaimRequest.findUniqueOrThrow({
+      where: { companyId_requesterUserId: { companyId: preRegistered.id, requesterUserId: user.id } },
+    });
+    expect(claim.status).toBe("PENDING");
+    expect(claim.origin).toBe("EXISTING_PRE_REGISTRATION");
 
     const company = await prisma.company.findUniqueOrThrow({ where: { id: preRegistered.id } });
     expect(company.controlStatus).toBe("CLAIM_PENDING");

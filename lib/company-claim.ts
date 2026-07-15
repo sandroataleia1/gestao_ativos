@@ -1,6 +1,7 @@
 import type { Prisma, SstProviderCompanyAccessLevel } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ConflictError, NotFoundError } from "@/lib/api-errors";
+import { ForbiddenError } from "@/lib/auth-server";
 import { logAudit } from "@/lib/audit";
 
 // Sprint Comercial SST 1.4 (reivindicação) — quando um representante real
@@ -115,6 +116,30 @@ export async function resolveClaimDecision(
   decision: ClaimDecision,
   accessLevel?: SstProviderCompanyAccessLevel,
 ): Promise<ClaimDecisionResult> {
+  // Sprint SST 1.4C, §12 — defesa em profundidade: o chamador
+  // (app/api/companies/claim-review/[relationshipId]/route.ts) já exige
+  // `requirePermission(SST_PROVIDER_MANAGE)`, que por sua vez já exige
+  // CompanyMembership ACTIVE — e, desde esta sprint, a ÚNICA forma de uma
+  // empresa ter uma CompanyMembership administrativa é através de uma
+  // CompanyClaimRequest APROVADA (ver lib/company-claim-request.ts). Ainda
+  // assim, este serviço nunca confia SÓ nisso (nem só no fato de
+  // `Company.controlStatus` estar CLAIM_PENDING) — reconfirma aqui que
+  // existe pelo menos uma reivindicação APPROVED para esta empresa antes de
+  // permitir qualquer decisão sobre vínculos de consultoria. Nunca é a
+  // reivindicação DO ATOR especificamente (um segundo admin convidado
+  // normalmente, sem nunca ter feito uma CompanyClaimRequest própria,
+  // continua podendo decidir) — só prova que o processo de reivindicação
+  // desta EMPRESA foi concluído corretamente ao menos uma vez.
+  const approvedClaim = await prisma.companyClaimRequest.findFirst({
+    where: { companyId, status: "APPROVED" },
+    select: { id: true },
+  });
+  if (!approvedClaim) {
+    throw new ForbiddenError(
+      "Esta empresa ainda não teve nenhuma reivindicação aprovada — não é possível decidir sobre consultorias.",
+    );
+  }
+
   const link = await prisma.sstProviderCompany.findFirst({
     where: {
       id: relationshipId,

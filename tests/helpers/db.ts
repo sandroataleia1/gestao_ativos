@@ -184,6 +184,11 @@ export async function cleanupFixtures(params: {
   }
 
   if (companyIds.length > 0) {
+    // CompanyClaimRequest.companyId/requesterUserId usam onDelete: Restrict
+    // (Sprint SST 1.4C) — precisa sair antes de qualquer tentativa de
+    // excluir a Company OU os Users referenciados como requester, senão o
+    // DELETE falha com violação de FK.
+    await prisma.companyClaimRequest.deleteMany({ where: { companyId: { in: companyIds } } });
     // CompanyMembership.companyId usa onDelete: Restrict — precisa ser
     // removida antes de qualquer tentativa de excluir a Company, senão o
     // DELETE da empresa falha com violação de FK.

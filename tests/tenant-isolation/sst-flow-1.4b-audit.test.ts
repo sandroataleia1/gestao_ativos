@@ -67,6 +67,25 @@ async function makeCompanyWithAdmin(label: string) {
   return { company, admin: toSessionUser(rawAdmin) };
 }
 
+/** Sprint SST 1.4C, §12 — resolveClaimDecision agora exige uma
+ * CompanyClaimRequest APPROVED para a empresa antes de permitir qualquer
+ * decisão CONTINUE/BLOCK. Só os testes que efetivamente chamam claimRoute
+ * precisam disto — os demais usuários de makeCompanyWithAdmin (matriz de
+ * transição do PATCH genérico, manipulação de accessLevel) não passam por
+ * resolveClaimDecision e não precisam desta linha extra. */
+async function approveClaimFor(companyId: string, adminUserId: string) {
+  await prisma.companyClaimRequest.create({
+    data: {
+      companyId,
+      requesterUserId: adminUserId,
+      status: "APPROVED",
+      origin: "EXISTING_PRE_REGISTRATION",
+      reviewedAt: new Date(),
+      reviewedByUserId: adminUserId,
+    },
+  });
+}
+
 async function makeProviderUser(label: string, role: "OWNER" | "TECHNICIAN" | "VIEWER" = "OWNER") {
   const provider = await createTestProvider(label);
   providerIds.push(provider.id);
@@ -199,6 +218,7 @@ describe("Corrida real na decisão de reivindicação (§12) — resolveClaimDec
   it("duas decisões concorrentes sobre o MESMO vínculo provisório: só uma aplica, a outra recebe 409", async () => {
     claimRoute ??= await import("@/app/api/companies/claim-review/[relationshipId]/route");
     const { company, admin } = await makeCompanyWithAdmin("race-claim-same-link");
+    await approveClaimFor(company.id, admin.id);
     await prisma.company.update({ where: { id: company.id }, data: { controlStatus: "CLAIM_PENDING" } });
     const provider = await createTestProvider("race-claim-same-link-p");
     providerIds.push(provider.id);
@@ -242,6 +262,7 @@ describe("Corrida real na decisão de reivindicação (§12) — resolveClaimDec
   it("duas consultorias provisórias DIFERENTES decididas CONCORRENTEMENTE: a empresa finaliza CLAIMED (nunca trava em CLAIM_PENDING)", async () => {
     claimRoute ??= await import("@/app/api/companies/claim-review/[relationshipId]/route");
     const { company, admin } = await makeCompanyWithAdmin("race-claim-cross-link");
+    await approveClaimFor(company.id, admin.id);
     await prisma.company.update({ where: { id: company.id }, data: { controlStatus: "CLAIM_PENDING" } });
 
     const provider1 = await createTestProvider("race-claim-cross-link-p1");

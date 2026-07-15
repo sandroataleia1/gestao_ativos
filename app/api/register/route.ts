@@ -8,6 +8,7 @@ import { provisionDefaultStockSetup } from "@/lib/stock-setup-provisioning";
 import { isValidBrazilianMobilePhone, maskBrazilianMobilePhone } from "@/lib/phone-mask";
 import { isValidCnpj } from "@/lib/cnpj";
 import { createCompanyWithCanonicalDocument, findCompanyByCnpj } from "@/lib/company-creation";
+import { createOrReuseClaimRequest } from "@/lib/company-claim-request";
 import { ConflictError } from "@/lib/api-errors";
 
 const MIN_PASSWORD_LENGTH = 8;
@@ -109,10 +110,18 @@ export async function POST(request: Request) {
       // (documentType, documentNormalized) é a fonte final de verdade
       // contra corrida (duas requisições de registro com o mesmo CNPJ ao
       // mesmo tempo) — ConflictError vira a mesma mensagem segura.
+      //
+      // Sprint SST 1.4C, §9 — mesmo um CNPJ ainda inexistente não comprova
+      // representação legal: a Company nasce CLAIM_PENDING (nunca CLAIMED
+      // automaticamente), igual ao caminho de reivindicação de uma empresa
+      // pré-cadastrada. O registro público fica temporariamente sem efeito
+      // prático sem um Super Admin Lite aprovando cada solicitação — essa
+      // limitação é aceita deliberadamente como contenção de segurança.
       company = await createCompanyWithCanonicalDocument({
         name: companyName,
         cnpj: cnpjInput,
         origin: "SELF_REGISTRATION",
+        controlStatus: "CLAIM_PENDING",
         phone,
       });
     } catch (error) {
@@ -123,11 +132,13 @@ export async function POST(request: Request) {
     }
   }
 
-  // Uma Company pré-cadastrada pela consultoria nunca teve RBAC/lookups
-  // provisionados (só Company + SstProviderCompany são criados no
-  // pré-cadastro) — precisa acontecer agora, na primeira vez que um usuário
-  // real se cadastra sobre ela, igual ao caminho de empresa nova.
-  const roles = await provisionDefaultRolesForCompany(company.id);
+  // Uma Company pré-cadastrada pela consultoria (ou recém-criada aqui)
+  // ainda não tem RBAC/lookups provisionados — precisa acontecer agora,
+  // ANTES da aprovação, para que `approveCompanyClaimRequest` só precise
+  // procurar o papel ADMIN já existente (nunca provisiona nada durante a
+  // aprovação em si — serviço de aprovação fica mais simples e mais óbvio
+  // de auditar).
+  await provisionDefaultRolesForCompany(company.id);
   await provisionDefaultAssetStatusesAndConditions(company.id);
   await provisionDefaultStockSetup(company.id);
 
@@ -145,22 +156,17 @@ export async function POST(request: Request) {
     );
   }
 
-  void roles; // provisionado para quando a reivindicação for aprovada — nunca usado para conceder ADMIN aqui.
+  // Contenção P0 (Sprint SST 1.4C) — este ponto do código NUNCA cria
+  // CompanyMembership/UserRole diretamente. Só conhecer o CNPJ (empresa
+  // nova ou pré-cadastrada) nunca comprova representação legal; a única
+  // forma de um usuário passar a administrar uma Company é através de uma
+  // CompanyClaimRequest aprovada explicitamente por um humano (futuro Super
+  // Admin Lite) — ver lib/company-claim-request.ts:approveCompanyClaimRequest.
+  await createOrReuseClaimRequest({
+    companyId: company.id,
+    requester: { id: userId, name },
+    origin: isClaim ? "EXISTING_PRE_REGISTRATION" : "SELF_REGISTRATION",
+  });
 
-  // CONTENÇÃO P0 (Sprint SST 1.4C, §2) — até aqui existia uma vulnerabilidade
-  // crítica: só CONHECER um CNPJ válido e preencher o formulário público já
-  // concedia CompanyMembership ACTIVE + papel ADMIN, imediatamente, mesmo
-  // quando a Company já existia (pré-cadastrada por uma consultoria, com
-  // colaboradores/treinamentos/documentos potencialmente reais). Nenhuma
-  // comprovação de representação legal da empresa era feita. Este ponto do
-  // código NUNCA cria CompanyMembership/UserRole nem altera
-  // Company.controlStatus — a única forma de um usuário passar a administrar
-  // uma Company (nova ou pré-cadastrada) é através de uma
-  // CompanyClaimRequest aprovada explicitamente (ver lib/company-claim-request.ts,
-  // introduzido na mesma sprint, no commit seguinte a este).
-  //
-  // Contenção mínima: a conta Better Auth já foi criada acima (usuário
-  // autenticado, sem tenant) — devolve sempre CLAIM_REVIEW_REQUIRED, nunca
-  // ok/claimPending como antes.
   return NextResponse.json({ ok: true, status: "CLAIM_REVIEW_REQUIRED" });
 }

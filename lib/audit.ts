@@ -58,8 +58,15 @@ export type AuditAction =
   | "sst_company.request_access_denied"
   | "sst_provider.claim_continue"
   | "sst_provider.claim_block"
-  | "company.claim_started"
-  | "company.claim_finalized";
+  | "company_claim.requested"
+  | "company_claim.request_reused"
+  | "company_claim.concurrent_request_detected"
+  | "company_claim.disputed"
+  | "company_claim.approved"
+  | "company_claim.rejected"
+  | "company_claim.cancelled"
+  | "company_claim.access_denied"
+  | "company_claim.invalid_transition";
 
 /**
  * Registra uma ação administrativa/de negócio crítica. Sempre chamado

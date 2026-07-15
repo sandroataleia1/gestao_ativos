@@ -56,6 +56,22 @@ async function makeClaimPendingCompany(label: string) {
   const rawAdmin = await createTestUserWithMembership(company.id, `${label}-admin`);
   await assignSystemRole(rawAdmin.id, company.id, "ADMIN");
   const admin = toSessionUser(rawAdmin);
+  // Sprint SST 1.4C, §12 — resolveClaimDecision agora exige uma
+  // CompanyClaimRequest APPROVED para a empresa antes de permitir qualquer
+  // decisão CONTINUE/BLOCK. Este helper monta o cenário "empresa já teve
+  // sua reivindicação aprovada, ainda tem vínculo provisório pendente de
+  // revisão" — o estado real em que a tela /onboarding/sst-providers passa
+  // a existir depois desta sprint.
+  await prisma.companyClaimRequest.create({
+    data: {
+      companyId: company.id,
+      requesterUserId: rawAdmin.id,
+      status: "APPROVED",
+      origin: "EXISTING_PRE_REGISTRATION",
+      reviewedAt: new Date(),
+      reviewedByUserId: rawAdmin.id,
+    },
+  });
 
   const provider = await createTestProvider(label);
   providerIds.push(provider.id);

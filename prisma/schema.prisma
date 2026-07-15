@@ -59,6 +59,32 @@ enum CompanyMembershipStatus {
   REVOKED
 }
 
+// Sprint SST 1.4C — estado de UMA solicitação para assumir a administração
+// de uma Company. Nunca confundir com CompanyMembership (a solicitação NÃO
+// concede acesso) nem com SstProviderCompany (isso é vínculo de consultoria,
+// não de dono empresarial). PENDING/UNDER_REVIEW são os únicos estados
+// "ativos" (bloqueiam nova Company duplicada, aparecem na página de
+// acompanhamento); os demais são terminais para aquele par (company,
+// requester) — uma nova tentativa reabre a mesma linha (nunca cria outra,
+// ver @@unique abaixo).
+enum CompanyClaimRequestStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+
+// Como a solicitação nasceu — nunca muda depois de criada (mesmo espírito de
+// CompanyOrigin). EXISTING_PRE_REGISTRATION = a Company já existia (UNCLAIMED,
+// pré-cadastrada por uma consultoria SST); SELF_REGISTRATION = a Company foi
+// criada nesta mesma tentativa de registro (CNPJ inexistente até então).
+enum CompanyClaimRequestOrigin {
+  SELF_REGISTRATION
+  EXISTING_PRE_REGISTRATION
+}
+
 model Company {
   id        String   @id @default(cuid())
   name      String
@@ -161,6 +187,7 @@ model Company {
   custodySignatureRequests CustodySignatureRequest[]
   auditLogs                AuditLog[]
   memberships               CompanyMembership[]
+  claimRequests             CompanyClaimRequest[]
 
   @@index([createdByProviderId])
   // Última linha de defesa contra duas empresas com o mesmo CNPJ (Sprint
@@ -219,6 +246,61 @@ model CompanyMembership {
 }
 
 // ---------------------------------------------------------------------------
+// Solicitação de reivindicação de Company (Sprint SST 1.4C — contenção da
+// vulnerabilidade em que só conhecer um CNPJ válido já concedia
+// CompanyMembership ACTIVE + papel ADMIN imediatamente, sem nenhuma
+// comprovação de representação legal). Uma linha aqui é só a INTENÇÃO de
+// assumir a administração de uma Company — nunca concede acesso por si só;
+// CompanyMembership só é criada por `approveCompanyClaimRequest`
+// (lib/company-claim-request.ts), nunca automaticamente.
+//
+// `@@unique([companyId, requesterUserId])` é proposital: uma nova tentativa
+// do mesmo usuário para a mesma empresa sempre REABRE esta mesma linha
+// (nunca cria uma segunda) — impede acúmulo infinito de solicitações PENDING
+// duplicadas e preserva o histórico (createdAt original nunca muda,
+// requestedAt é atualizado a cada reabertura). Uma pessoa DIFERENTE pode
+// enviar sua própria solicitação (linha própria, `requesterUserId`
+// diferente) — isso pode levar `Company.controlStatus` a DISPUTED quando
+// há mais de um solicitante ativo (ver lib/company-claim-request.ts).
+// ---------------------------------------------------------------------------
+
+model CompanyClaimRequest {
+  id              String                    @id @default(cuid())
+  companyId       String
+  requesterUserId String
+  status          CompanyClaimRequestStatus @default(PENDING)
+  origin          CompanyClaimRequestOrigin
+
+  requestedAt      DateTime  @default(now())
+  reviewedAt       DateTime?
+  reviewedByUserId String?
+  rejectionReason  String?
+  // Reservado para expiração futura de solicitações esquecidas — nenhum job
+  // preenche/consome este campo nesta sprint (fora de escopo, ver §21 do
+  // spec: nenhuma automação de expiração ainda).
+  expiresAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // onDelete: Restrict — nunca apagar fisicamente uma Company que ainda tem
+  // solicitação vinculada (mesmo padrão de CompanyMembership.company acima).
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  // onDelete: Restrict — a solicitação é histórico de quem pediu; não pode
+  // sobreviver sem o requerente identificado (diferente de "quem revisou",
+  // que é só proveniência acessória, ver reviewedByUser abaixo).
+  requester User @relation("CompanyClaimRequester", fields: [requesterUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  // onDelete: SetNull — excluir o revisor não pode apagar o histórico da
+  // decisão em si (mesmo padrão de SstProviderCompany.companyReviewedByUser).
+  reviewedByUser User? @relation("CompanyClaimReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@unique([companyId, requesterUserId])
+  @@index([companyId, status, requestedAt])
+  @@index([requesterUserId, status])
+  @@index([status, requestedAt])
+}
+
+// ---------------------------------------------------------------------------
 // Autenticação (Better Auth) — nomes e campos seguem exatamente o schema
 // que o adapter Prisma do Better Auth espera (ver docs/auth-rbac.md).
 // IDs usam @default(cuid()) porque `advanced.database.generateId: false`
@@ -253,6 +335,8 @@ model User {
   sstProviderUsers SstProviderUser[]
   companyMemberships          CompanyMembership[] @relation("CompanyMembershipUser")
   invitedCompanyMemberships   CompanyMembership[] @relation("CompanyMembershipInviter")
+  companyClaimRequestsMade     CompanyClaimRequest[] @relation("CompanyClaimRequester")
+  companyClaimRequestsReviewed CompanyClaimRequest[] @relation("CompanyClaimReviewer")
 
   @@index([companyId])
 }

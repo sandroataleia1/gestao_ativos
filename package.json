@@ -16,6 +16,7 @@
     "diagnose:documents": "tsx scripts/diagnose-company-documents.ts",
     "diagnose:company-documents": "tsx scripts/diagnose-company-documents.ts",
     "diagnose:pre-m2": "tsx scripts/diagnose-pre-m2.ts",
+    "diagnose:claim-flow-exposure": "tsx scripts/diagnose-claim-flow-exposure.ts",
     "backfill:company-memberships": "tsx scripts/backfill-company-memberships.ts",
     "backfill:company-documents": "tsx scripts/backfill-company-documents.ts",
     "test": "vitest run",

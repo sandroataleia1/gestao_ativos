@@ -42,6 +42,26 @@ export class CompanySelectionRequiredError extends Error {
 }
 
 /**
+ * Erro distinguível para um usuário autenticado, sem nenhuma
+ * CompanyMembership ACTIVE, mas com uma CompanyClaimRequest PENDING/
+ * UNDER_REVIEW em aberto (Sprint SST 1.4C, §11) — nunca deve ser tratado
+ * como o ForbiddenError genérico de "nenhuma empresa vinculada": páginas
+ * redirecionam para /company-claim/pending (nunca para dentro do Portal
+ * Empresa); APIs devolvem 403 com `{ code: "CLAIM_PENDING" }` (ver
+ * lib/api-errors.ts). Carrega só o id da solicitação — nunca dados da
+ * Company (nome/CNPJ ficam por conta da própria página, que já está
+ * autorizada a lê-los para O DONO da solicitação).
+ */
+export class CompanyClaimPendingError extends Error {
+  claimRequestId: string;
+  constructor(claimRequestId: string) {
+    super("Existe uma solicitação de reivindicação em análise para este usuário.");
+    this.name = "CompanyClaimPendingError";
+    this.claimRequestId = claimRequestId;
+  }
+}
+
+/**
  * Lê a sessão atual a partir dos cookies da requisição. Memoizado por
  * requisição (React `cache`) para evitar múltiplas idas ao banco quando
  * vários helpers são chamados na mesma renderização.
@@ -159,6 +179,24 @@ export async function requireCompany(): Promise<{
   // responsabilidade exclusiva do script versionado (scripts/backfill-
   // company-memberships.ts), nunca do caminho de requisição (ver Sprint 0.5,
   // Parte I).
+  //
+  // Sprint SST 1.4C, §11 — antes de cair no ForbiddenError genérico,
+  // diferencia "sem empresa E sem solicitação" de "sem empresa MAS com uma
+  // CompanyClaimRequest em aberto" (ver lib/company-claim-request.ts). Um
+  // usuário com claim pendente nunca deve ver app/forbidden.tsx nem entrar
+  // em loop — vai para /company-claim/pending. Consulta inline (não importa
+  // lib/company-claim-request.ts) para evitar import circular: esse módulo
+  // importa de lib/api-errors.ts, que por sua vez importa deste arquivo.
+  const activeClaim = await prisma.companyClaimRequest.findFirst({
+    where: { requesterUserId: user.id, status: { in: ["PENDING", "UNDER_REVIEW"] } },
+    orderBy: { requestedAt: "desc" },
+    select: { id: true },
+  });
+  if (activeClaim) {
+    logInfo("company_context_claim_pending", { userId: user.id, claimRequestId: activeClaim.id });
+    throw new CompanyClaimPendingError(activeClaim.id);
+  }
+
   logWarn("company_context_no_active_membership", { userId: user.id });
   throw new ForbiddenError("Nenhuma empresa ativa vinculada a este usuário.");
 }
@@ -309,6 +347,9 @@ export async function requireCompanyOrDeny() {
     // Redireciona para a página dedicada (Sprint 0.6, Parte D) em vez de
     // renderizar app/forbidden.tsx.
     if (error instanceof CompanySelectionRequiredError) redirect("/select-company");
+    // Sprint SST 1.4C, §11 — claim pendente nunca vira app/forbidden.tsx
+    // nem entra no Portal Empresa: sempre a página de acompanhamento.
+    if (error instanceof CompanyClaimPendingError) redirect("/company-claim/pending");
     if (error instanceof ForbiddenError) forbidden();
     throw error;
   }
@@ -320,6 +361,9 @@ export async function requirePermissionOrDeny(permission: PermissionKey | (strin
   } catch (error) {
     if (error instanceof AuthError) unauthorized();
     if (error instanceof CompanySelectionRequiredError) redirect("/select-company");
+    // Sprint SST 1.4C, §11 — claim pendente nunca vira app/forbidden.tsx
+    // nem entra no Portal Empresa: sempre a página de acompanhamento.
+    if (error instanceof CompanyClaimPendingError) redirect("/company-claim/pending");
     if (error instanceof ForbiddenError) forbidden();
     throw error;
   }
@@ -331,6 +375,9 @@ export async function requireRoleOrDeny(role: SystemRole | (string & {})) {
   } catch (error) {
     if (error instanceof AuthError) unauthorized();
     if (error instanceof CompanySelectionRequiredError) redirect("/select-company");
+    // Sprint SST 1.4C, §11 — claim pendente nunca vira app/forbidden.tsx
+    // nem entra no Portal Empresa: sempre a página de acompanhamento.
+    if (error instanceof CompanyClaimPendingError) redirect("/company-claim/pending");
     if (error instanceof ForbiddenError) forbidden();
     throw error;
   }
