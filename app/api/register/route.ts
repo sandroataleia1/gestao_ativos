@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { signUpEmailInternal } from "@/lib/auth";
-import { SYSTEM_ROLES } from "@/lib/permissions";
 import { provisionDefaultRolesForCompany } from "@/lib/rbac-provisioning";
 import { provisionDefaultAssetStatusesAndConditions } from "@/lib/asset-lookup-provisioning";
 import { provisionDefaultStockSetup } from "@/lib/stock-setup-provisioning";
@@ -10,7 +9,6 @@ import { isValidBrazilianMobilePhone, maskBrazilianMobilePhone } from "@/lib/pho
 import { isValidCnpj } from "@/lib/cnpj";
 import { createCompanyWithCanonicalDocument, findCompanyByCnpj } from "@/lib/company-creation";
 import { ConflictError } from "@/lib/api-errors";
-import { logAudit } from "@/lib/audit";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -147,46 +145,22 @@ export async function POST(request: Request) {
     );
   }
 
-  const adminRole = roles.get(SYSTEM_ROLES.ADMIN)!;
-  let claimPending = false;
-  // Sprint 0.6: sem uma CompanyMembership ACTIVE aqui, o admin recém-criado
-  // fica bloqueado (NO_ACTIVE_MEMBERSHIP) na primeira requisição, já que
-  // CompanyMembership é a fonte real de autorização desde a Sprint 0.5 (ver
-  // docs/adr/ADR-001). `status: ACTIVE`/`activatedAt: now` diretos (não
-  // INVITED) — é o próprio usuário se auto-registrando/reivindicando como
-  // dono da empresa, não um convite de terceiro.
-  await prisma.$transaction(async (tx) => {
-    await tx.userRole.create({ data: { userId, companyId: company.id, roleId: adminRole.id } });
-    await tx.companyMembership.create({
-      data: { userId, companyId: company.id, status: "ACTIVE", activatedAt: new Date() },
-    });
+  void roles; // provisionado para quando a reivindicação for aprovada — nunca usado para conceder ADMIN aqui.
 
-    if (isClaim) {
-      // §16: a reivindicação nunca conclui sozinha — se existir ao menos um
-      // vínculo provisório (authorizationBasis: PROVIDER_PRE_REGISTRATION)
-      // ainda não revisado, a empresa fica CLAIM_PENDING até decidir sobre
-      // cada um (ver lib/company-claim.ts). Sem nenhum vínculo provisório
-      // pendente (caso raro), a reivindicação já finaliza como CLAIMED.
-      const unresolvedCount = await tx.sstProviderCompany.count({
-        where: { companyId: company.id, authorizationBasis: "PROVIDER_PRE_REGISTRATION", status: "ACTIVE", companyReviewedAt: null },
-      });
-      claimPending = unresolvedCount > 0;
-      await tx.company.update({
-        where: { id: company.id },
-        data: claimPending ? { controlStatus: "CLAIM_PENDING" } : { controlStatus: "CLAIMED", claimedAt: new Date() },
-      });
-      await logAudit(tx, {
-        companyId: company.id,
-        actorUserId: userId,
-        actorName: name,
-        action: "company.claim_started",
-        targetType: "Company",
-        targetId: company.id,
-        targetLabel: company.name,
-        metadata: { claimPending },
-      });
-    }
-  });
-
-  return NextResponse.json({ ok: true, claimPending });
+  // CONTENÇÃO P0 (Sprint SST 1.4C, §2) — até aqui existia uma vulnerabilidade
+  // crítica: só CONHECER um CNPJ válido e preencher o formulário público já
+  // concedia CompanyMembership ACTIVE + papel ADMIN, imediatamente, mesmo
+  // quando a Company já existia (pré-cadastrada por uma consultoria, com
+  // colaboradores/treinamentos/documentos potencialmente reais). Nenhuma
+  // comprovação de representação legal da empresa era feita. Este ponto do
+  // código NUNCA cria CompanyMembership/UserRole nem altera
+  // Company.controlStatus — a única forma de um usuário passar a administrar
+  // uma Company (nova ou pré-cadastrada) é através de uma
+  // CompanyClaimRequest aprovada explicitamente (ver lib/company-claim-request.ts,
+  // introduzido na mesma sprint, no commit seguinte a este).
+  //
+  // Contenção mínima: a conta Better Auth já foi criada acima (usuário
+  // autenticado, sem tenant) — devolve sempre CLAIM_REVIEW_REQUIRED, nunca
+  // ok/claimPending como antes.
+  return NextResponse.json({ ok: true, status: "CLAIM_REVIEW_REQUIRED" });
 }
