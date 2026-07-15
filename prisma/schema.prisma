@@ -301,6 +301,42 @@ model CompanyClaimRequest {
 }
 
 // ---------------------------------------------------------------------------
+// Autorização interna global da plataforma (Sprint SST 1.4D) — Portal Super
+// Admin Lite (/platform-admin), limitado nesta sprint à análise/decisão de
+// CompanyClaimRequest. Deliberadamente SEPARADO de CompanyMembership/
+// UserRole (RBAC de UMA Company) e de SstProviderUser (RBAC de UMA
+// consultoria): um PlatformUser não pertence a nenhum tenant — é
+// autorização da PLATAFORMA como um todo. Nunca cria CompanyMembership,
+// nunca altera User.companyId, nunca cria SstProviderUser, nunca concede
+// acesso operacional a colaboradores/treinamentos/ativos/documentos de
+// nenhuma Company — ver lib/platform-auth.ts.
+//
+// `active` (não um hard delete) é o único jeito de revogar — preserva
+// histórico de quem já foi Super Admin (mesmo padrão de
+// SstProvider.active/CompanyMembership.status usado em todo o projeto).
+// ---------------------------------------------------------------------------
+
+enum PlatformUserRole {
+  SUPER_ADMIN
+}
+
+model PlatformUser {
+  id        String           @id @default(cuid())
+  userId    String           @unique
+  role      PlatformUserRole
+  active    Boolean          @default(true)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  // onDelete: Restrict — nunca apagar fisicamente o User titular de um
+  // PlatformUser (mesmo padrão de CompanyClaimRequest.requester); revogar é
+  // sempre `active: false`, nunca um DELETE.
+  user User @relation("PlatformUserAccount", fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([active, role])
+}
+
+// ---------------------------------------------------------------------------
 // Autenticação (Better Auth) — nomes e campos seguem exatamente o schema
 // que o adapter Prisma do Better Auth espera (ver docs/auth-rbac.md).
 // IDs usam @default(cuid()) porque `advanced.database.generateId: false`
@@ -345,6 +381,7 @@ model User {
   invitedCompanyMemberships   CompanyMembership[] @relation("CompanyMembershipInviter")
   companyClaimRequestsMade     CompanyClaimRequest[] @relation("CompanyClaimRequester")
   companyClaimRequestsReviewed CompanyClaimRequest[] @relation("CompanyClaimReviewer")
+  platformUser                 PlatformUser?         @relation("PlatformUserAccount")
 
   @@index([companyId])
 }

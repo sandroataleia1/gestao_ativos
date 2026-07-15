@@ -20,6 +20,8 @@
     "diagnose:pending-claim-user-company": "tsx scripts/diagnose-pending-claim-user-company.ts",
     "backfill:company-memberships": "tsx scripts/backfill-company-memberships.ts",
     "backfill:company-documents": "tsx scripts/backfill-company-documents.ts",
+    "platform-admin:grant": "tsx scripts/platform-admin-grant.ts",
+    "platform-admin:revoke": "tsx scripts/platform-admin-revoke.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

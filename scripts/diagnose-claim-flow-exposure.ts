@@ -10,6 +10,17 @@ import { validateSinceTimestamp } from "../lib/claim-exposure-timestamp";
 // contenção. Nunca apaga/altera nada — só relata para revisão manual.
 // Nunca imprime CNPJ/e-mail completos.
 //
+// Sprint SST 1.4D, §2 — este script CONSULTA `prisma.companyClaimRequest`
+// (ver mais abaixo, na classificação de cada membership) — a tabela criada
+// pela migration `20260715124742_company_claim_request`. Isso significa
+// que ele SÓ FUNCIONA depois de `prisma migrate deploy` aplicar essa
+// migration: rodar contra um banco de produção que ainda não tem a tabela
+// falha com um erro do Postgres ("relation CompanyClaimRequest does not
+// exist"), não com um resultado incorreto silencioso — mas mesmo assim a
+// ORDEM importa no plano de implantação (ver relatório da sprint, §29):
+// SEMPRE `prisma migrate deploy` ANTES de rodar este diagnóstico, nunca o
+// inverso.
+//
 // Sprint SST 1.4C.1, §10 — NUNCA usa um timestamp default silencioso (um
 // valor presumido errado produziria falso negativo: memberships suspeitas
 // fora da janela verificada simplesmente não apareceriam). O timestamp de

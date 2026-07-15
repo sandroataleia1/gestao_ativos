@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { provisionDefaultRolesForCompany } from "@/lib/rbac-provisioning";
 import type {
   CompanyMembershipStatus,
+  PlatformUserRole,
   SstProviderCompanyStatus,
   SstProviderUserRole,
 } from "@/app/generated/prisma/client";
@@ -130,6 +131,23 @@ export async function createTestMembership(params: {
       companyId: params.companyId,
       ...(params.status ? { status: params.status } : {}),
       invitedByUserId: params.invitedByUserId ?? null,
+    },
+  });
+}
+
+/** Concede acesso ao Portal Super Admin a um usuário já existente. Domínio
+ * de autorização separado de CompanyMembership/SstProviderUser — não exige
+ * (nem cria) nenhum vínculo com empresa. */
+export async function createTestPlatformUser(params: {
+  userId: string;
+  role?: PlatformUserRole;
+  active?: boolean;
+}) {
+  return prisma.platformUser.create({
+    data: {
+      userId: params.userId,
+      role: params.role ?? "SUPER_ADMIN",
+      active: params.active ?? true,
     },
   });
 }
