@@ -4,6 +4,7 @@ import { z } from "zod";
 import { requirePlatformRole } from "@/lib/platform-auth";
 import { startCompanyClaimReview } from "@/lib/platform-admin-claims";
 import { handleApiError } from "@/lib/api-errors";
+import { requireTrustedMutationOrigin } from "@/lib/mutation-origin";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -17,6 +18,7 @@ const startReviewSchema = z.object({
 
 export async function POST(request: Request, { params }: RouteParams) {
   try {
+    requireTrustedMutationOrigin(request);
     const { user } = await requirePlatformRole("SUPER_ADMIN");
     const { id } = await params;
 

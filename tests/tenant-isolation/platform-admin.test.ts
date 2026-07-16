@@ -117,10 +117,25 @@ async function makePendingClaim(label: string, opts: { withCnpj?: boolean } = {}
   return { company, requester, claim };
 }
 
-function jsonRequest(body: Record<string, unknown>) {
-  return new NextRequest("http://localhost/api/platform-admin/x", {
+// Origem confiável real desta aplicação em teste — mesmo valor de
+// BETTER_AUTH_URL (.env.test) usado por lib/mutation-origin.ts para montar
+// a allowlist. Uma chamada real de navegador (fetch same-origin, ver
+// app/platform-admin/company-claims/[id]/claim-detail-panel.tsx) sempre
+// envia este header em POST — por isso é o default de `jsonRequest`;
+// cenários de CSRF sobrescrevem/omitem explicitamente.
+const TRUSTED_ORIGIN = "http://localhost:3010";
+
+function jsonRequest(body: Record<string, unknown>, headerOverrides?: Record<string, string | undefined>) {
+  const headers: Record<string, string> = { "content-type": "application/json", origin: TRUSTED_ORIGIN };
+  if (headerOverrides) {
+    for (const [key, value] of Object.entries(headerOverrides)) {
+      if (value === undefined) delete headers[key];
+      else headers[key] = value;
+    }
+  }
+  return new NextRequest(`${TRUSTED_ORIGIN}/api/platform-admin/x`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   });
 }
@@ -993,6 +1008,111 @@ describe("Segurança do Portal Super Admin (§24, 47-54)", () => {
 
     const event = await prisma.auditLog.findFirst({ where: { action: "platform_admin.claim_approved", targetId: claim.id } });
     expect(event).toBeNull();
+  });
+});
+
+// =============================================================================
+// Sprint SST 1.4D.2, §4 — CSRF: proteção de Origin/Host das rotas
+// administrativas de escrita (requireTrustedMutationOrigin,
+// lib/mutation-origin.ts). Item 10 do spec ("requisição legítima
+// server-side, se existir") não tem teste correspondente: não existe hoje
+// nenhuma chamada servidor-a-servidor via HTTP para estas rotas — todo
+// código do próprio projeto que precisa da mesma lógica chama os serviços
+// de domínio diretamente (lib/platform-admin-claims.ts), nunca via fetch
+// interno.
+// =============================================================================
+
+describe("CSRF — proteção de Origin/Host das rotas administrativas (Sprint SST 1.4D.2, §4)", () => {
+  const ROUTES: { name: string; call: (req: NextRequest, claimId: string) => Promise<Response>; body: Record<string, unknown> }[] = [
+    { name: "start-review", call: (req, id) => startReviewRoute.POST(req, routeParams(id)), body: {} },
+    { name: "approve", call: (req, id) => approveRoute.POST(req, routeParams(id)), body: { reviewNote: VALID_NOTE } },
+    { name: "reject", call: (req, id) => rejectRoute.POST(req, routeParams(id)), body: { reviewNote: VALID_NOTE } },
+  ];
+
+  for (const route of ROUTES) {
+    describe(`rota ${route.name}`, () => {
+      it("1 — sessão ausente, mas Origin confiável: 401 (AuthError), nunca 403 de origem", async () => {
+        const { claim } = await makePendingClaim(`csrf-${route.name}-nosession`);
+        loginAs(null);
+        const res = await route.call(jsonRequest(route.body), claim.id);
+        expect(res.status).toBe(401);
+      });
+
+      it("2 — sessão válida e Origin oficial: sucesso (200)", async () => {
+        const { claim } = await makePendingClaim(`csrf-${route.name}-ok`);
+        const anchor = await makeUnclaimedCompany(`csrf-${route.name}-ok-rev`);
+        const { session } = await makeSuperAdmin(anchor.id, `csrf-${route.name}-ok-rev-a`);
+        loginAs(session);
+        const res = await route.call(jsonRequest(route.body), claim.id);
+        expect(res.status).toBe(200);
+      });
+
+      it("3 — Origin externo (site de terceiros): 403, mesmo com sessão válida", async () => {
+        const { claim } = await makePendingClaim(`csrf-${route.name}-external`);
+        const anchor = await makeUnclaimedCompany(`csrf-${route.name}-external-rev`);
+        const { session } = await makeSuperAdmin(anchor.id, `csrf-${route.name}-external-rev-a`);
+        loginAs(session);
+        const res = await route.call(jsonRequest(route.body, { origin: "https://evil-attacker.example" }), claim.id);
+        expect(res.status).toBe(403);
+      });
+
+      it("4 — Origin com domínio semelhante (typosquat) nunca engana o allowlist exato: 403", async () => {
+        const { claim } = await makePendingClaim(`csrf-${route.name}-lookalike`);
+        const anchor = await makeUnclaimedCompany(`csrf-${route.name}-lookalike-rev`);
+        const { session } = await makeSuperAdmin(anchor.id, `csrf-${route.name}-lookalike-rev-a`);
+        loginAs(session);
+        // Sufixo do host oficial embutido dentro de um domínio diferente —
+        // um matcher por startsWith/endsWith mal feito aceitaria isso.
+        const res = await route.call(jsonRequest(route.body, { origin: "http://localhost:3010.evil-attacker.example" }), claim.id);
+        expect(res.status).toBe(403);
+      });
+
+      it("5 — Origin de subdomínio não autorizado: 403", async () => {
+        const { claim } = await makePendingClaim(`csrf-${route.name}-subdomain`);
+        const anchor = await makeUnclaimedCompany(`csrf-${route.name}-subdomain-rev`);
+        const { session } = await makeSuperAdmin(anchor.id, `csrf-${route.name}-subdomain-rev-a`);
+        loginAs(session);
+        const res = await route.call(jsonRequest(route.body, { origin: "http://evil.localhost:3010" }), claim.id);
+        expect(res.status).toBe(403);
+      });
+
+      it("6 — Host incompatível com a origem confiável: 403, mesmo com Origin oficial", async () => {
+        const { claim } = await makePendingClaim(`csrf-${route.name}-host`);
+        const anchor = await makeUnclaimedCompany(`csrf-${route.name}-host-rev`);
+        const { session } = await makeSuperAdmin(anchor.id, `csrf-${route.name}-host-rev-a`);
+        loginAs(session);
+        const res = await route.call(jsonRequest(route.body, { host: "attacker-controlled.example" }), claim.id);
+        expect(res.status).toBe(403);
+      });
+
+      it("7 — Sec-Fetch-Site: cross-site é sempre respeitado, mesmo que Origin bata com a allowlist", async () => {
+        const { claim } = await makePendingClaim(`csrf-${route.name}-secfetch`);
+        const anchor = await makeUnclaimedCompany(`csrf-${route.name}-secfetch-rev`);
+        const { session } = await makeSuperAdmin(anchor.id, `csrf-${route.name}-secfetch-rev-a`);
+        loginAs(session);
+        const res = await route.call(jsonRequest(route.body, { "sec-fetch-site": "cross-site" }), claim.id);
+        expect(res.status).toBe(403);
+      });
+
+      it("9 — requisição sem nenhum header de origem: rejeitada (política fail-closed)", async () => {
+        const { claim } = await makePendingClaim(`csrf-${route.name}-noheaders`);
+        const anchor = await makeUnclaimedCompany(`csrf-${route.name}-noheaders-rev`);
+        const { session } = await makeSuperAdmin(anchor.id, `csrf-${route.name}-noheaders-rev-a`);
+        loginAs(session);
+        const res = await route.call(jsonRequest(route.body, { origin: undefined }), claim.id);
+        expect(res.status).toBe(403);
+      });
+    });
+  }
+
+  it("8 — as 3 rotas só exportam POST (método inesperado nunca alcança o handler; Next.js responde 405 automaticamente)", () => {
+    for (const mod of [startReviewRoute, approveRoute, rejectRoute] as unknown as Record<string, unknown>[]) {
+      expect(typeof mod.POST).toBe("function");
+      expect(mod.GET).toBeUndefined();
+      expect(mod.PUT).toBeUndefined();
+      expect(mod.DELETE).toBeUndefined();
+      expect(mod.PATCH).toBeUndefined();
+    }
   });
 });
 

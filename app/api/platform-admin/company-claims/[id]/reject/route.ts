@@ -4,6 +4,7 @@ import { requirePlatformRole } from "@/lib/platform-auth";
 import { rejectCompanyClaimRequestAsPlatformAdmin } from "@/lib/platform-admin-claims";
 import { platformAdminDecisionSchema } from "@/lib/validations/platform-admin";
 import { handleApiError } from "@/lib/api-errors";
+import { requireTrustedMutationOrigin } from "@/lib/mutation-origin";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -12,6 +13,7 @@ type RouteParams = { params: Promise<{ id: string }> };
 // rejectCompanyClaimRequestAsPlatformAdmin.
 export async function POST(request: Request, { params }: RouteParams) {
   try {
+    requireTrustedMutationOrigin(request);
     const { user } = await requirePlatformRole("SUPER_ADMIN");
     const { id } = await params;
 

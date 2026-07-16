@@ -5,6 +5,13 @@ de deploy) e `docs/homologation.md` (homologação manual geral) com as
 conclusões e o gate ESPECÍFICOS desta sprint. Ler antes de qualquer deploy das
 Sprints SST 1.4A–1.4D.1 (nenhuma foi implantada até esta sprint).
 
+> **Atualizado pela Sprint SST 1.4D.2** (`docs/sprint-1.4d.2-homologation-gate.md`):
+> a seção 2 (CSRF) abaixo foi corrigida/substituída — a conclusão original
+> ("SameSite=Lax sozinho resolve") estava incompleta. A seção 5 (plano de
+> implantação) também foi ajustada quanto à descrição do diagnóstico de
+> exposição (nunca é "somente leitura" — ver `docs/sprint-1.4d.2-homologation-gate.md`,
+> §2). Ler os dois documentos juntos antes de qualquer deploy.
+
 ## 1. Proteção das rotas administrativas (`app/api/platform-admin/**`)
 
 Únicas 3 rotas existentes nesta sprint:
@@ -44,29 +51,85 @@ itens 39/40/44/45/46/52/53 e "Concorrência real" item 4):
 
 **Conclusão: a proteção das rotas administrativas críticas está adequada.**
 
-## 2. CSRF
+## 2. CSRF (revisado e comprovado por teste na Sprint SST 1.4D.2)
 
-**Conclusão: mitigado pela configuração de cookie já existente — nenhuma
-mudança de código foi necessária nesta sprint.**
+**A conclusão da Sprint SST 1.4D.1 ("SameSite=Lax sozinho resolve") estava
+incompleta e foi corrigida nesta sprint.** `SameSite=Lax` continua sendo uma
+mitigação real, mas descansar só nela é um único ponto de falha sem nenhuma
+corroboração do lado do servidor — o gate de homologação 1.4D.2 pediu
+explicitamente para não aceitar essa conclusão sem prova.
 
-`lib/auth.ts` já configura `advanced.defaultCookieAttributes.sameSite: "lax"`
-para o cookie de sessão do Better Auth (`httpOnly: true` também). Como as 3
-rotas de escrita de `/api/platform-admin/**` (e todas as outras rotas
-autenticadas por cookie do projeto) dependem exclusivamente desse cookie de
-sessão via `requireAuth()`/`requirePlatformRole()`, uma requisição `POST`
-disparada a partir de um site de terceiros (formulário HTML, `fetch`
-cross-origin, ou a técnica de enctype `text/plain` para simular JSON) NUNCA
-inclui o cookie de sessão — `SameSite=Lax` só permite o envio do cookie em
-navegação de nível superior via `GET`, nunca em `POST` cross-site. A
-requisição forjada chega sem sessão e é rejeitada com 401 antes de qualquer
-lógica de negócio rodar.
+**Auditoria de como a sessão é resolvida nestas rotas:** as 3 rotas de
+`app/api/platform-admin/**` são Route Handlers customizados do Next.js —
+elas chamam `requirePlatformRole()` → `requireAuth()` → `auth.api.getSession()`
+para ler a sessão do cookie, mas NUNCA passam pelo `auth.handler` do Better
+Auth (o catch-all montado só em `/api/auth/**`). Isso importa porque o
+`originCheckMiddleware`/`validateOrigin` nativo do Better Auth
+(`node_modules/better-auth/dist/api/middlewares/origin-check.mjs`) é
+middleware do PRÓPRIO pipeline de endpoints do Better Auth — só roda para
+requisições que o `auth.handler` processa diretamente. Rotas customizadas
+que só chamam `getSession()` para ler a sessão NUNCA passam por esse
+middleware. Confirmado também que este projeto não tem `middleware.ts`
+fazendo essa validação — `proxy.ts` (o `middleware.ts` renomeado no Next.js
+16) só faz rate limiting e propagação de request-id, nada de Origin/Host.
 
-Isso torna uma camada adicional de validação de `Origin`/`Host` redundante
-para esta sprint — adicioná-la seria complexidade sem ganho de segurança
-real. Se no futuro o projeto passar a aceitar autenticação por outro meio
-que não dependa de cookie `SameSite=Lax` (ex.: token em header controlado
-pelo client, aceito também via cookie legado), esta conclusão precisa ser
-revisada.
+**Conclusão: antes desta sprint, a proteção CSRF real dessas 3 rotas era
+100% dependente do atributo `SameSite=Lax` do cookie — nenhuma validação de
+Origin/Host do lado do servidor existia. Corrigido nesta sprint**, com uma
+segunda camada de defesa: `lib/mutation-origin.ts` (`requireTrustedMutationOrigin`),
+chamado como a PRIMEIRA linha de cada uma das 3 rotas, antes de qualquer
+leitura de sessão/banco.
+
+Configuração auditada explicitamente (checklist do gate):
+
+| Item | Valor | Onde |
+|---|---|---|
+| `disableCSRFCheck` | não definido (default `false`) | `lib/auth.ts` |
+| `disableOriginCheck` | não definido (default `false`, exceto em ambiente de teste, comportamento padrão da lib) | `lib/auth.ts` |
+| `trustedOrigins` (Better Auth) | `DEV_LAN_ORIGINS` (só o IP de LAN de dev) — usado só pelos endpoints do PRÓPRIO Better Auth | `lib/auth.ts` |
+| `sameSite` do cookie | `"lax"`, explícito | `lib/auth.ts`, `advanced.defaultCookieAttributes` |
+| `secure` do cookie | `IS_PRODUCTION` (`true` em produção, via `useSecureCookies`) | `lib/auth.ts` |
+| `httpOnly` do cookie | `true` | `lib/auth.ts` |
+| `domain` do cookie | não definido (nenhum valor explícito) — o mais restritivo possível: o navegador escopa ao host exato, nunca compartilha entre subdomínios | `lib/auth.ts` |
+| Middleware/proxy próprio validando Origin/Host | Não existia antes desta sprint; agora existe via `lib/mutation-origin.ts`, aplicado nas 3 rotas | `proxy.ts` (rate limit only), `lib/mutation-origin.ts` (novo) |
+
+`disableCSRFCheck`/`disableOriginCheck` **nunca estão habilitados** em
+nenhum ambiente deste projeto (não aparecem em nenhum `.env*`, nem como
+`true` em `lib/auth.ts`) — confirmado por `grep`.
+
+### `requireTrustedMutationOrigin` (novo, `lib/mutation-origin.ts`)
+
+Chamado como primeira linha de cada rota (`start-review`/`approve`/`reject`).
+Regras, nesta ordem:
+
+1. `Sec-Fetch-Site: cross-site` → rejeita (403) incondicionalmente — sinal
+   de Fetch Metadata enviado pelo navegador, não falsificável por
+   JavaScript da página.
+2. `Origin` ausente → rejeita (política fail-closed: uma chamada real de
+   navegador para estas rotas sempre envia `Origin` em POST, mesmo
+   same-origin; não existe hoje nenhuma chamada legítima servidor-a-servidor
+   para estas rotas).
+3. `Origin` presente mas fora da allowlist (`BETTER_AUTH_URL` + origem de
+   LAN de dev) → rejeita.
+4. `Host` presente mas fora da allowlist → rejeita. Nunca lê
+   `X-Forwarded-Host` (o `nginx/conf.d/patrium.conf` deste projeto nunca o
+   define — só `Host: $host`, `X-Real-IP`, `X-Forwarded-For`,
+   `X-Forwarded-Proto` — confiar nesse header seria aceitar um valor
+   forjável por qualquer cliente direto).
+
+Comparação sempre por IGUALDADE EXATA (nunca `startsWith`/`endsWith`) —
+evita domínio parecido (`patrium-esis.com.br`) ou subdomínio não autorizado
+(`evil.patrium.esis.com.br`) passarem por um checagem de prefixo/sufixo mal
+feita. Nunca cria um token CSRF próprio — só valida Origin/Host contra a
+mesma fonte de verdade (`BETTER_AUTH_URL`) já usada pelo Better Auth.
+
+A política preserva: navegador real (Origin/Host sempre batem em uso
+normal), testes (helper `jsonRequest` em
+`tests/tenant-isolation/platform-admin.test.ts` usa a mesma origem
+confiável por default), proxy reverso em produção (Host vem de
+`nginx/conf.d/patrium.conf`, que sempre repassa o domínio real), e
+desenvolvimento local/LAN (`DEV_LAN_ORIGINS`, reaproveitado de
+`lib/dev-lan-origins.ts`).
 
 ## 3. Autenticação forte / reautenticação (MFA)
 
@@ -254,8 +317,13 @@ implantação: resultado, screenshots, horário, usuário de teste, ambiente.
 1. Rodar sem parâmetros → confirmar falha segura (sem consultar o banco).
 2. Rodar só com início → confirmar falha.
 3. Rodar só com fim → confirmar falha.
-4. Rodar com janela válida → confirmar execução somente-leitura e a janela
-   impressa corretamente.
+4. Rodar com janela válida → confirmar que a janela é impressa corretamente
+   e que NENHUM dado de negócio (Company/User/CompanyMembership/
+   CompanyClaimRequest/SstProviderCompany/UserRole) é alterado — a única
+   escrita esperada é o INSERT append-only em `PlatformAuditLog` (ver
+   correção de nomenclatura na Sprint SST 1.4D.2, §2: este script nunca foi
+   estritamente "somente leitura" desde que passou a auditar sua própria
+   execução).
 5. Confirmar evento `platform_admin.exposure_diagnostic_executed` em
    `/platform-admin/audit`.
 

@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { sendMail } from "@/lib/mail";
 import { logAudit } from "@/lib/audit";
 import { resolveUnambiguousCompany } from "@/lib/company-context";
+import { DEV_LAN_ORIGINS } from "@/lib/dev-lan-origins";
 // `logger` (pino cru), NUNCA `logInfo`/`logWarn` de lib/logger.ts aqui — esses
 // dois chamam `next/headers()` internamente para propagar request-id, o que
 // os hooks do Better Auth não podem depender (rodam fora de um request scope
@@ -22,13 +23,9 @@ import { logger } from "@/lib/logger";
 // atacante.
 const INTERNAL_SIGNUP_HEADER = "x-internal-signup-secret";
 
-// Mesmo IP de `allowedDevOrigins` em next.config.ts — sem isso, o Better
-// Auth rejeita com 403 "Missing or null Origin" qualquer requisição feita a
-// partir do dev server acessado pelo IP da rede local (ex.: testando no
-// celular), já que só confia por padrão na origem derivada de
-// BETTER_AUTH_URL (http://localhost:3010). Ajuste/adicione o IP aqui junto
-// com next.config.ts se ele mudar (DHCP).
-const DEV_LAN_ORIGINS = ["http://192.168.1.239:3010"];
+// DEV_LAN_ORIGINS agora vive em lib/dev-lan-origins.ts (Sprint SST 1.4D.2)
+// — reaproveitado também por lib/mutation-origin.ts, que não pode importar
+// deste módulo (lib/auth.ts é mockado inteiro em vários testes).
 
 // Só esses hops são confiáveis para "desembrulhar" X-Forwarded-For (ver
 // advanced.ipAddress.trustedProxies abaixo). Sem isso, um client que envie

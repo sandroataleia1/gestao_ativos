@@ -1,16 +1,36 @@
 import "dotenv/config";
 import { prisma } from "../lib/prisma";
-import { maskCnpjForLog } from "../lib/cnpj";
 import { validateExposureWindow } from "../lib/claim-exposure-timestamp";
-import { classifyMembership, MEMBERSHIP_CLASSIFICATION_LABELS, type MembershipClassification } from "../lib/claim-exposure-classifier";
-import { logPlatformAudit } from "../lib/platform-audit";
+import { MEMBERSHIP_CLASSIFICATION_LABELS, type MembershipClassification } from "../lib/claim-exposure-classifier";
+import { runExposureDiagnosticQuery, recordExposureDiagnosticExecuted } from "../lib/claim-exposure-diagnostic";
 
-// Sprint SST 1.4C / 1.4C.1 / 1.4D.1 — diagnóstico SOMENTE LEITURA de
+// Sprint SST 1.4C / 1.4C.1 / 1.4D.1 / 1.4D.2 — diagnóstico de
 // CompanyMembership potencialmente criadas pelo fluxo inseguro de
 // app/api/register/route.ts, ativo entre o deploy do commit 42fc120 (que
 // continha a concessão automática de ADMIN a partir do CNPJ) e a
 // implantação da contenção. Nunca apaga/altera nada — só relata para
 // revisão manual. Nunca imprime CNPJ/e-mail completos.
+//
+// Sprint SST 1.4D.2, §2 — descrição corrigida: este script NUNCA é
+// estritamente "somente leitura" (nomenclatura usada até a Sprint 1.4D.1).
+// Desde a Sprint SST 1.4D.1 ele persiste um evento de auditoria
+// (`platform_admin.exposure_diagnostic_executed`) em `PlatformAuditLog` a
+// cada execução — política A do gate de homologação 1.4D.2: manter essa
+// auditoria persistente (é o próprio propósito do PlatformAuditLog: toda
+// execução do diagnóstico é, em si, uma ação administrativa que deve ficar
+// registrada) e documentar precisamente o que isso significa. A garantia
+// real e testada (ver lib/claim-exposure-diagnostic.ts e
+// tests/tenant-isolation/claim-exposure-diagnostic.test.ts) é:
+//
+//   NUNCA altera Company, User, CompanyMembership, CompanyClaimRequest,
+//   SstProviderCompany ou UserRole — a ÚNICA escrita realizada é um INSERT
+//   append-only em PlatformAuditLog (nunca UPDATE, nunca DELETE, em
+//   nenhuma tabela). Toda a consulta/classificação em si
+//   (`runExposureDiagnosticQuery`, lib/claim-exposure-diagnostic.ts) é 100%
+//   leitura.
+//
+// Por isso o termo usado abaixo (mensagens de CLI) é "não altera dados de
+// negócio", nunca mais "somente leitura" sem qualificação.
 //
 // Sprint SST 1.4D.1, §2 — o contrato mudou de "só --since" (implicitamente
 // até "agora") para uma JANELA completa e obrigatória: --since/
@@ -63,13 +83,6 @@ function printUsageAndExit(message: string): never {
   process.exit(1);
 }
 
-function maskEmail(email: string): string {
-  const [local, domain] = email.split("@");
-  if (!domain) return "***";
-  const visible = local.slice(0, 2);
-  return `${visible}${"*".repeat(Math.max(local.length - 2, 1))}@${domain}`;
-}
-
 async function main() {
   const sinceArg = process.argv.find((a) => a.startsWith("--since="))?.split("=")[1];
   const untilArg = process.argv.find((a) => a.startsWith("--until="))?.split("=")[1];
@@ -87,113 +100,18 @@ async function main() {
   console.log("=".repeat(78));
   console.log(`Janela analisada: ${since.toISOString()}  até  ${until.toISOString()}`);
   console.log(`Banco: ${process.env.DATABASE_URL?.replace(/:\/\/[^@]+@/, "://***:***@")}`);
-  console.log("Modo: SOMENTE LEITURA — nenhuma escrita será feita, nenhuma membership é revogada.");
+  console.log("Modo: NÃO ALTERA DADOS DE NEGÓCIO — nenhuma Company/User/CompanyMembership/");
+  console.log("CompanyClaimRequest/SstProviderCompany/UserRole é criada, alterada ou removida;");
+  console.log("nenhuma membership é revogada. Única escrita: um registro append-only desta");
+  console.log("execução em PlatformAuditLog (platform_admin.exposure_diagnostic_executed).");
   console.log("=".repeat(78));
   console.log();
 
-  // Sprint SST 1.4D.1, §17 — persiste que este diagnóstico foi executado
-  // (fonte histórica: quando/por quem a janela foi analisada). Nunca inclui
-  // CNPJ/e-mail nos metadados — só a janela (datas) e a contagem de linhas.
-  await logPlatformAudit({
-    action: "platform_admin.exposure_diagnostic_executed",
-    severity: "INFO",
-    source: "CLI",
-    metadata: { since: since.toISOString(), until: until.toISOString() },
-  }).catch(() => {
-    // Nunca bloqueia o diagnóstico (somente-leitura) por falha ao persistir
-    // o próprio registro de auditoria — best-effort, mesmo padrão de
-    // logAudit() em pontos não-transacionais deste projeto.
-  });
+  await recordExposureDiagnosticExecuted(since, until);
 
-  // Busca TODAS as memberships ACTIVE (não só as da janela) — precisamos do
-  // universo completo para classificar corretamente "anterior à exposição"
-  // e "posterior à correção" (§3), nunca confundindo isso com "dentro da
-  // janela mas não suspeita".
-  const allMemberships = await prisma.companyMembership.findMany({
-    where: { status: "ACTIVE" },
-    include: {
-      user: { select: { id: true, email: true, createdAt: true } },
-      company: { select: { id: true, name: true, origin: true, controlStatus: true, documentNormalized: true } },
-    },
-    orderBy: { createdAt: "asc" },
-  });
+  const { totalActiveMemberships, counts, manualReviewEntries } = await runExposureDiagnosticQuery(since, until);
 
-  const counts: Record<MembershipClassification, number> = {
-    SUSPICIOUS_INSECURE_FLOW: 0,
-    LEGITIMATE_INVITE: 0,
-    LEGITIMATE_CLAIM_APPROVED: 0,
-    SEED_OR_DEMO: 0,
-    BEFORE_EXPOSURE: 0,
-    AFTER_FIX: 0,
-    INCONCLUSIVE_REVIEW_MANUALLY: 0,
-  };
-
-  const manualReviewEntries: string[] = [];
-
-  for (const membership of allMemberships) {
-    // Fora da janela — classifica só pela data, sem consultas extras (nunca
-    // reclassifica algo anterior à exposição/posterior à correção como
-    // suspeito só porque o padrão coincidiria por acaso).
-    if (membership.createdAt.getTime() < since.getTime() || membership.createdAt.getTime() > until.getTime()) {
-      const classification = classifyMembership({
-        membershipCreatedAt: membership.createdAt,
-        windowSince: since,
-        windowUntil: until,
-        companyName: membership.company.name,
-        companyOrigin: membership.company.origin,
-        invitedByUserId: membership.invitedByUserId,
-        hasApprovedClaim: false,
-        hasClaimStartedAuditEvent: false,
-        userCreatedAt: membership.user.createdAt,
-      });
-      counts[classification] += 1;
-      continue;
-    }
-
-    // Dentro da janela — sinais adicionais (1 consulta extra cada, aceitável:
-    // só para o subconjunto realmente dentro da janela analisada).
-    const claimStartedEvent = await prisma.auditLog.findFirst({
-      where: {
-        companyId: membership.companyId,
-        action: "company.claim_started",
-        createdAt: { gte: new Date(membership.createdAt.getTime() - 60_000), lte: new Date(membership.createdAt.getTime() + 60_000) },
-      },
-    });
-    const claimRequest = await prisma.companyClaimRequest.findUnique({
-      where: { companyId_requesterUserId: { companyId: membership.companyId, requesterUserId: membership.userId } },
-    });
-    const hasApprovedClaim = claimRequest?.status === "APPROVED";
-
-    const classification = classifyMembership({
-      membershipCreatedAt: membership.createdAt,
-      windowSince: since,
-      windowUntil: until,
-      companyName: membership.company.name,
-      companyOrigin: membership.company.origin,
-      invitedByUserId: membership.invitedByUserId,
-      hasApprovedClaim,
-      hasClaimStartedAuditEvent: Boolean(claimStartedEvent),
-      userCreatedAt: membership.user.createdAt,
-    });
-    counts[classification] += 1;
-
-    if (classification === "SUSPICIOUS_INSECURE_FLOW" || classification === "INCONCLUSIVE_REVIEW_MANUALLY") {
-      const label = classification === "SUSPICIOUS_INSECURE_FLOW" ? "[SUSPEITA]  " : "[REVISAR]   ";
-      const lines = [
-        `${label}membership=${membership.id}`,
-        `  companyId=${membership.company.id} nome="${membership.company.name}" origin=${membership.company.origin} controlStatus=${membership.company.controlStatus}`,
-        membership.company.documentNormalized ? `  cnpj=${maskCnpjForLog(membership.company.documentNormalized)}` : undefined,
-        `  userId=${membership.user.id} email=${maskEmail(membership.user.email)}`,
-        `  membership.createdAt=${membership.createdAt.toISOString()} user.createdAt=${membership.user.createdAt.toISOString()}`,
-        `  claim_started AuditLog encontrado: ${Boolean(claimStartedEvent)}`,
-        `  CompanyClaimRequest existente: ${claimRequest ? claimRequest.status : "NENHUMA"}`,
-        "",
-      ].filter((l): l is string => l !== undefined);
-      manualReviewEntries.push(lines.join("\n"));
-    }
-  }
-
-  console.log(`Total de CompanyMembership ACTIVE no sistema: ${allMemberships.length}`);
+  console.log(`Total de CompanyMembership ACTIVE no sistema: ${totalActiveMemberships}`);
   console.log();
   console.log("Contagens agregadas (todas as categorias — §3):");
   for (const key of Object.keys(counts) as MembershipClassification[]) {
@@ -208,13 +126,25 @@ async function main() {
     console.log(`REGISTROS PARA REVISÃO MANUAL (suspeitos + inconclusivos): ${manualReviewEntries.length}`);
     console.log("=".repeat(78));
     for (const entry of manualReviewEntries) {
-      console.log(entry);
+      const label = entry.classification === "SUSPICIOUS_INSECURE_FLOW" ? "[SUSPEITA]  " : "[REVISAR]   ";
+      console.log(`${label}membership=${entry.membershipId}`);
+      console.log(
+        `  companyId=${entry.companyId} nome="${entry.companyName}" origin=${entry.companyOrigin} controlStatus=${entry.companyControlStatus}`,
+      );
+      if (entry.cnpjMasked) console.log(`  cnpj=${entry.cnpjMasked}`);
+      console.log(`  userId=${entry.userId} email=${entry.emailMasked}`);
+      console.log(`  membership.createdAt=${entry.membershipCreatedAt.toISOString()} user.createdAt=${entry.userCreatedAt.toISOString()}`);
+      console.log(`  claim_started AuditLog encontrado: ${entry.hasClaimStartedAuditEvent}`);
+      console.log(`  CompanyClaimRequest existente: ${entry.claimRequestStatus ?? "NENHUMA"}`);
+      console.log();
     }
   }
 
   console.log("=".repeat(78));
-  console.log("Nenhuma linha foi alterada ou removida — script somente-leitura.");
-  console.log("Nenhuma CompanyMembership é revogada ou corrigida automaticamente por este script.");
+  console.log("Nenhum dado de negócio foi alterado ou removido (Company/User/CompanyMembership/");
+  console.log("CompanyClaimRequest/SstProviderCompany/UserRole). Nenhuma CompanyMembership é");
+  console.log("revogada ou corrigida automaticamente por este script. Única escrita realizada:");
+  console.log("o registro append-only desta execução em PlatformAuditLog (acima).");
   console.log("=".repeat(78));
 
   await prisma.$disconnect();
