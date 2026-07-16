@@ -3,9 +3,22 @@ import { prisma } from "@/lib/prisma";
 import { NotFoundError } from "@/lib/api-errors";
 
 // Leitura de colaboradores para o Portal Consultoria — deliberadamente um
-// arquivo separado de lib/employees.ts: o formato de retorno aqui é status
-// de treinamento por colaborador, não dados cadastrais completos (a
-// consultoria nunca cria/edita/inativa Employee, ver docs/portal-consultoria.md).
+// arquivo separado de lib/employees.ts: o formato de retorno aqui inclui
+// status de treinamento por colaborador (granularidade que só interessa a
+// este portal) e documento MASCARADO (§24 da Sprint SST 1.4F — privacidade:
+// o Portal SST nunca recebe o documento completo do colaborador, mesmo
+// tendo passado a poder criar/editar/inativar/reativar a partir desta
+// sprint via lib/employees.ts, que é quem de fato grava no banco).
+
+/** Mascara um documento genérico para exibição — mantém só os 2 primeiros e
+ * os 2 últimos caracteres (mesmo espírito de maskCnpjForLog em lib/cnpj.ts,
+ * mas sem formato fixo: Employee.document não é validado como CPF, ver
+ * lib/validations/employee.ts). */
+export function maskEmployeeDocument(document: string): string {
+  const trimmed = document.trim();
+  if (trimmed.length <= 4) return "*".repeat(trimmed.length);
+  return `${trimmed.slice(0, 2)}${"*".repeat(trimmed.length - 4)}${trimmed.slice(-2)}`;
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const EXPIRING_SOON_WINDOW_DAYS = 30;
@@ -33,27 +46,32 @@ export type SstCompanyEmployeesPageParams = {
   page: number;
   pageSize: number;
   search?: string;
+  /** Sprint SST 1.4F, §15/§23 — default "ACTIVE" preserva o comportamento
+   * anterior a esta sprint (a tela só mostrava ativos); "INACTIVE"/"ALL"
+   * existem para a gestão (ex.: localizar quem reativar). */
+  status?: "ACTIVE" | "INACTIVE" | "ALL";
 };
 
 /**
- * Página de colaboradores ATIVOS da empresa, com contadores de treinamento
- * por colaborador — sem N+1: pagina `Employee` primeiro, depois faz só 2
- * queries adicionais para a página atual inteira (treinamentos obrigatórios
- * da empresa + participações da página), nunca uma query por colaborador.
+ * Página de colaboradores da empresa, com contadores de treinamento por
+ * colaborador — sem N+1: pagina `Employee` primeiro, depois faz só 2 queries
+ * adicionais para a página atual inteira (treinamentos obrigatórios da
+ * empresa + participações da página), nunca uma query por colaborador.
  * Mesmo padrão de getMissingMandatoryTrainingEmployeeCount
  * (lib/sst-dashboard.ts), mas retornando o detalhe por colaborador em vez
- * de só a contagem agregada.
+ * de só a contagem agregada. Documento sempre mascarado (§24) — nunca
+ * retorna o valor completo para este portal.
  */
 export async function getSstCompanyEmployeesPage(
   companyId: string,
   params: SstCompanyEmployeesPageParams,
   now = new Date(),
 ) {
-  const { page, pageSize, search } = params;
+  const { page, pageSize, search, status = "ACTIVE" } = params;
 
   const where: Prisma.EmployeeWhereInput = {
     companyId,
-    status: "ACTIVE",
+    ...(status === "ALL" ? {} : { status }),
     ...(search
       ? {
           OR: [
@@ -73,6 +91,7 @@ export async function getSstCompanyEmployeesPage(
         name: true,
         document: true,
         registration: true,
+        status: true,
         department: { select: { id: true, name: true } },
         position: { select: { id: true, name: true } },
       },
@@ -127,14 +146,21 @@ export async function getSstCompanyEmployeesPage(
     }
 
     const missingMandatoryCount = mandatoryTrainingIds.filter((id) => !validTrainingIds.has(id)).length;
+    const { document, ...employeeWithoutDocument } = employee;
 
     return {
-      ...employee,
+      ...employeeWithoutDocument,
+      documentMasked: maskEmployeeDocument(document),
       validCount,
       expiredCount,
       expiringSoonCount,
       missingMandatoryCount,
-      status: classifyEmployeeTrainingStatus({ expiredCount, expiringSoonCount, missingMandatoryCount }),
+      // Renomeado de `status` para `trainingStatus` (Sprint SST 1.4F) —
+      // `status` sozinho agora é o campo ACTIVE/INACTIVE do próprio
+      // Employee (incluído no `select` acima), nunca a classificação de
+      // conformidade de treinamento; as duas nunca podem compartilhar o
+      // mesmo nome de campo na mesma linha.
+      trainingStatus: classifyEmployeeTrainingStatus({ expiredCount, expiringSoonCount, missingMandatoryCount }),
     };
   });
 

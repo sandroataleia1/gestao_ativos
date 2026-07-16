@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { requireSstCompanyViewAccess } from "@/lib/sst-auth";
+import { requireSstProviderEmployeeViewAccess } from "@/lib/sst-auth";
 import { getEmployeeTrainingSummary } from "@/lib/sst-employees";
 import { handleApiError } from "@/lib/api-errors";
 
@@ -12,7 +12,7 @@ type RouteParams = { params: Promise<{ companyId: string; employeeId: string }> 
 export async function GET(_request: Request, { params }: RouteParams) {
   try {
     const { companyId, employeeId } = await params;
-    await requireSstCompanyViewAccess(companyId);
+    await requireSstProviderEmployeeViewAccess(companyId);
 
     const summary = await getEmployeeTrainingSummary(companyId, employeeId);
 

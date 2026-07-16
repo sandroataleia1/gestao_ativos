@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ZodError, flattenError } from "zod";
 
 import { AuthError, CompanyClaimPendingError, CompanySelectionRequiredError, ForbiddenError } from "@/lib/auth-server";
+import { CompanyControlReviewInProgressError } from "@/lib/sst-auth";
 import { Prisma } from "@/app/generated/prisma/client";
 import { captureException } from "@/lib/monitoring";
 import { logError } from "@/lib/logger";
@@ -57,6 +58,14 @@ export function handleApiError(error: unknown) {
   // usuário. Clientes podem redirecionar para /company-claim/pending.
   if (error instanceof CompanyClaimPendingError) {
     return NextResponse.json({ code: "CLAIM_PENDING" }, { status: 403 });
+  }
+  // Sprint SST 1.4F — código estável distinto de ForbiddenError: a
+  // consultoria TEM acesso à empresa, só está temporariamente impedida de
+  // mutar durante a revisão de controle (CLAIM_PENDING/DISPUTED). Cliente
+  // pode tratar 409 + este código para mostrar o aviso específico em vez de
+  // um erro genérico de permissão.
+  if (error instanceof CompanyControlReviewInProgressError) {
+    return NextResponse.json({ code: "COMPANY_CONTROL_REVIEW_IN_PROGRESS", error: error.message }, { status: 409 });
   }
   if (error instanceof ForbiddenError) {
     return NextResponse.json({ error: error.message }, { status: 403 });

@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
 import { handleApiError } from "@/lib/api-errors";
-import { assertReferencesBelongToCompany, employeeListInclude } from "@/lib/employees";
+import { createEmployeeForCompany, employeeListInclude } from "@/lib/employees";
 import { employeeInputSchema } from "@/lib/validations/employee";
 
 export async function GET(request: NextRequest) {
@@ -35,18 +35,19 @@ export async function GET(request: NextRequest) {
   }
 }
 
+// Sprint SST 1.4F — criação extraída para lib/employees.ts:
+// createEmployeeForCompany (compartilhada com o Portal Consultoria SST),
+// que agora também audita a criação (`employee.create`, antes não
+// registrada) e trata duplicidade de documento com mensagem amigável (nunca
+// expõe P2002 bruto).
 export async function POST(request: NextRequest) {
   try {
-    const { companyId } = await requirePermission(PERMISSIONS.EMPLOYEE_MANAGE);
+    const { companyId, user } = await requirePermission(PERMISSIONS.EMPLOYEE_MANAGE);
 
     const body = await request.json();
     const input = employeeInputSchema.parse(body);
-    await assertReferencesBelongToCompany(companyId, input);
 
-    const employee = await prisma.employee.create({
-      data: { ...input, companyId },
-      include: employeeListInclude,
-    });
+    const employee = await createEmployeeForCompany(companyId, input, { id: user.id, name: user.name });
 
     return NextResponse.json({ employee }, { status: 201 });
   } catch (error) {
