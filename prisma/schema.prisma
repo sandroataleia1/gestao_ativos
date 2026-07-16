@@ -337,6 +337,59 @@ model PlatformUser {
 }
 
 // ---------------------------------------------------------------------------
+// Auditoria persistente de ações GLOBAIS da plataforma (Sprint SST 1.4D.1,
+// §4). `AuditLog` (acima) exige `companyId` obrigatório — correto para
+// ações de negócio de UMA empresa, mas incapaz de representar corretamente
+// ações que não pertencem a nenhuma Company (bootstrap do primeiro Super
+// Admin, concessão/revogação de acesso, tentativa de acesso não autorizado
+// ao Portal Super Admin, execução do diagnóstico de exposição). Nunca
+// representa uma autorização operacional em si (isso continua sendo só
+// PlatformUser.active) — é só o REGISTRO HISTÓRICO append-only dessas
+// ações. Logs estruturados (pino, ver lib/logger.ts) continuam existindo
+// como complemento em tempo real; esta tabela é a fonte histórica.
+// ---------------------------------------------------------------------------
+
+enum PlatformAuditSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum PlatformAuditSource {
+  WEB
+  CLI
+  SYSTEM
+  FIRST_BOOTSTRAP
+}
+
+model PlatformAuditLog {
+  id        String                @id @default(cuid())
+  action    String
+  severity  PlatformAuditSeverity
+  source    PlatformAuditSource
+  // Nulo quando a origem é FIRST_BOOTSTRAP (o primeiro Super Admin nunca
+  // tem um ator PlatformUser preexistente que o tenha concedido) ou quando
+  // a ação é do próprio SYSTEM (ex.: diagnóstico rodado sem sessão HTTP).
+  // onDelete: SetNull — mesmo padrão de AuditLog.actor: excluir o usuário
+  // não pode bloquear nem apagar o histórico da ação que ele executou.
+  actorUserId String?
+  actor       User?   @relation("PlatformAuditLogActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  targetType  String?
+  targetId    String?
+  requestId   String?
+  ipAddress   String?
+  userAgent   String?
+  reason      String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([action, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([targetType, targetId, createdAt])
+  @@index([severity, createdAt])
+}
+
+// ---------------------------------------------------------------------------
 // Autenticação (Better Auth) — nomes e campos seguem exatamente o schema
 // que o adapter Prisma do Better Auth espera (ver docs/auth-rbac.md).
 // IDs usam @default(cuid()) porque `advanced.database.generateId: false`
@@ -382,6 +435,7 @@ model User {
   companyClaimRequestsMade     CompanyClaimRequest[] @relation("CompanyClaimRequester")
   companyClaimRequestsReviewed CompanyClaimRequest[] @relation("CompanyClaimReviewer")
   platformUser                 PlatformUser?         @relation("PlatformUserAccount")
+  platformAuditLogsAsActor     PlatformAuditLog[]    @relation("PlatformAuditLogActor")
 
   @@index([companyId])
 }

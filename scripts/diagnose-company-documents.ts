@@ -2,6 +2,7 @@ import "dotenv/config";
 
 import { prisma } from "@/lib/prisma";
 import { isValidCnpj, maskCnpjForLog, normalizeCnpj } from "@/lib/cnpj";
+import { looksLikeDemoData } from "@/lib/demo-data";
 
 /**
  * Diagnóstico SOMENTE-LEITURA dos documentos (CNPJ) das empresas — campo
@@ -33,27 +34,8 @@ import { isValidCnpj, maskCnpjForLog, normalizeCnpj } from "@/lib/cnpj";
  */
 
 // --- Classificação de dado demonstrativo -------------------------------------
-// Mesmos padrões de scripts/backfill-company-documents.ts — nomes que só
-// existem porque foram criados manualmente durante sprints de
-// desenvolvimento/teste deste projeto, nunca por um usuário real via
-// /register, ou pelos seeds oficiais (prisma/seed.ts, prisma/seed-sst-demo.ts).
-const DEMO_NAME_PATTERNS = [
-  /^Empresa Demo$/,
-  /\(Demo SST\)$/,
-  /^Consultoria Segura SST — Acesso ao Portal/,
-  /^QA Empresa/,
-  /^Empresa Teste/,
-  /^Empresa Mascara Teste$/,
-  /^Empresa Com Celular$/,
-  /^Empresa Vazia/,
-  /^Nova Empresa/,
-  /^Empresa Stock/,
-  /^Empresa [A-Z] Teste$/,
-];
-
-function looksLikeDemoData(name: string): boolean {
-  return DEMO_NAME_PATTERNS.some((pattern) => pattern.test(name));
-}
+// Extraído para lib/demo-data.ts (Sprint SST 1.4D.1) — reaproveitado também
+// por scripts/diagnose-claim-flow-exposure.ts.
 
 // --- Utilidades puras (sem I/O) ---------------------------------------------
 // Normalização/validação de dígito verificador reaproveitadas de

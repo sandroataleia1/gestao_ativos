@@ -29,7 +29,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       reviewNote: input.reviewNote,
     });
 
-    return NextResponse.json({ ok: true, status: result.status, reassigned: result.reassigned });
+    return NextResponse.json({ ok: true, status: result.status });
   } catch (error) {
     return handleApiError(error);
   }

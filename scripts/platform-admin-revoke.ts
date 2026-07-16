@@ -1,15 +1,21 @@
 import "dotenv/config";
 import { prisma } from "../lib/prisma";
-import { parseEmailArg, revokePlatformAdmin } from "../lib/platform-admin-bootstrap";
+import { parseEmailArg, parseArgValue, revokePlatformAdmin } from "../lib/platform-admin-bootstrap";
 
-// Sprint SST 1.4D, §4 — revoga o acesso de Super Admin. Ação destrutiva:
-// exige confirmação explícita (--confirm) e, para revogar o ÚLTIMO
-// SUPER_ADMIN ativo, a flag extraordinária --force (documentada abaixo).
+// Sprint SST 1.4D, §4 / Sprint SST 1.4D.1, §8 — revoga o acesso de Super
+// Admin. Ação destrutiva: exige confirmação explícita (--confirm) e motivo
+// (--reason). Para revogar o ÚLTIMO SUPER_ADMIN ativo, exige a flag
+// extraordinária e nomeada `--allow-no-active-super-admin` (nunca um
+// `--force` genérico) MAIS a confirmação adicional
+// `--confirm-empty-platform` — duas flags distintas, de propósito, para que
+// ninguém acione esse caso extraordinário por engano.
 //
-// Uso: npm run platform-admin:revoke -- --email=usuario@dominio.com --confirm
-// Último admin ativo: adicionar também --force (só use se tiver certeza —
-// ninguém mais poderá conceder acesso de Super Admin depois disso, exceto
-// via acesso direto ao banco).
+// Uso:
+//   npm run platform-admin:revoke -- --email=usuario@dominio.com --confirm --reason="motivo"
+//
+// Último admin ativo (extraordinário):
+//   npm run platform-admin:revoke -- --email=usuario@dominio.com --confirm --reason="motivo" \
+//     --allow-no-active-super-admin --confirm-empty-platform
 
 function maskEmail(email: string): string {
   const [local, domain] = email.split("@");
@@ -20,8 +26,11 @@ function maskEmail(email: string): string {
 async function main() {
   const argv = process.argv.slice(2);
   const email = parseEmailArg(argv);
+  const reason = parseArgValue(argv, "reason");
+  const revokedByEmail = parseArgValue(argv, "revoked-by") ?? undefined;
   const confirmed = argv.includes("--confirm");
-  const force = argv.includes("--force");
+  const allowNoActiveSuperAdmin = argv.includes("--allow-no-active-super-admin");
+  const confirmEmptyPlatform = argv.includes("--confirm-empty-platform");
 
   if (!email) {
     console.error("ERRO: informe --email=usuario@dominio.com");
@@ -31,13 +40,25 @@ async function main() {
   }
   if (!confirmed) {
     console.error("ERRO: revogação exige confirmação explícita — adicione --confirm.");
-    console.error("Uso: npm run platform-admin:revoke -- --email=usuario@dominio.com --confirm");
+    process.exitCode = 1;
+    await prisma.$disconnect();
+    return;
+  }
+  if (!reason) {
+    console.error('ERRO: revogação exige motivo — adicione --reason="motivo da revogação".');
+    process.exitCode = 1;
+    await prisma.$disconnect();
+    return;
+  }
+  if (allowNoActiveSuperAdmin && !confirmEmptyPlatform) {
+    console.error("ERRO: --allow-no-active-super-admin exige também a confirmação adicional --confirm-empty-platform.");
+    console.error("Isso deixaria a plataforma temporariamente sem NENHUM Super Admin ativo — confirme que é intencional.");
     process.exitCode = 1;
     await prisma.$disconnect();
     return;
   }
 
-  const result = await revokePlatformAdmin(email, { force });
+  const result = await revokePlatformAdmin(email, { reason, allowNoActiveSuperAdmin, revokedByEmail });
 
   if (!result.ok) {
     if (result.reason === "USER_NOT_FOUND") {
@@ -47,7 +68,7 @@ async function main() {
     } else if (result.reason === "LAST_ACTIVE_SUPER_ADMIN") {
       console.error(`ERRO: ${maskEmail(email)} é o ÚLTIMO SUPER_ADMIN ativo.`);
       console.error("Revogar deixaria a plataforma sem ninguém capaz de conceder acesso de Super Admin.");
-      console.error("Se isso é mesmo o que você quer, rode de novo com a flag --force.");
+      console.error("Se isso é mesmo o que você quer, rode de novo com --allow-no-active-super-admin --confirm-empty-platform.");
     }
     process.exitCode = 1;
     await prisma.$disconnect();

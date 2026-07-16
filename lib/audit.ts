@@ -69,6 +69,7 @@ export type AuditAction =
   | "company_claim.invalid_transition"
   | "platform_admin.claim_viewed"
   | "platform_admin.claim_review_started"
+  | "platform_admin.claim_review_reassignment_blocked"
   | "platform_admin.claim_approved"
   | "platform_admin.claim_rejected"
   | "platform_admin.invalid_claim_transition";

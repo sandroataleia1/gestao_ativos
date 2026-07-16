@@ -23,18 +23,23 @@ export type StartReviewResult = {
   claimId: string;
   companyId: string;
   status: string;
-  reassigned: boolean;
 };
 
 /**
  * PENDING -> UNDER_REVIEW. Idempotente para o MESMO revisor (chamar de novo
  * sobre uma claim já UNDER_REVIEW por ele mesmo é um no-op de sucesso).
- * Reatribuir de outro revisor para este NUNCA é silencioso: sempre gera um
- * evento de auditoria com o revisor anterior e o novo, mesmo permitindo a
- * reatribuição (política explícita — spec §10: "impedir tomada silenciosa",
- * não necessariamente "impedir tomada"). Nunca cria membership, nunca
- * atribui ADMIN, nunca altera vínculo SST, nunca altera Company para
- * CLAIMED.
+ *
+ * Sprint SST 1.4D.1, §9 — endurecido: uma claim já UNDER_REVIEW por OUTRO
+ * Super Admin ativo NUNCA é tomada silenciosamente por esta chamada (nem
+ * mesmo com auditoria por trás, como na versão anterior) — sempre rejeita
+ * com ConflictError e audita a tentativa. Não existe hoje necessidade
+ * operacional que justifique uma reatribuição automática (nenhum volume
+ * real de reivindicações concorrentes em produção) — por decisão explícita
+ * do spec desta sprint ("bloquear e deixar a funcionalidade para uma
+ * evolução futura"), a reatribuição explícita (ação dedicada, com
+ * confirmação e justificativa) fica para uma sprint futura. Nunca cria
+ * membership, nunca atribui ADMIN, nunca altera vínculo SST, nunca altera
+ * Company para CLAIMED.
  *
  * Reaproveita `reviewedByUserId`/`reviewedAt` (já existentes no schema
  * desde a Sprint SST 1.4C) também para "quem está revisando agora" — nunca
@@ -53,7 +58,7 @@ export async function startCompanyClaimReview(params: {
   if (!existing) throw new NotFoundError("Solicitação de reivindicação não encontrada.");
 
   if (existing.status === "UNDER_REVIEW" && existing.reviewedByUserId === reviewer.id) {
-    return { claimId: existing.id, companyId: existing.companyId, status: existing.status, reassigned: false };
+    return { claimId: existing.id, companyId: existing.companyId, status: existing.status };
   }
 
   if (!ACTIVE_CLAIM_STATUSES.includes(existing.status as (typeof ACTIVE_CLAIM_STATUSES)[number])) {
@@ -69,24 +74,39 @@ export async function startCompanyClaimReview(params: {
     throw new ConflictError("Esta solicitação não pode ser colocada em análise no estado atual.");
   }
 
-  const previousReviewerUserId = existing.status === "UNDER_REVIEW" ? existing.reviewedByUserId : null;
-  const reassigned = Boolean(previousReviewerUserId && previousReviewerUserId !== reviewer.id);
+  if (existing.status === "UNDER_REVIEW" && existing.reviewedByUserId && existing.reviewedByUserId !== reviewer.id) {
+    // Já em análise por OUTRO Super Admin — nunca sobrescreve
+    // silenciosamente (§9). Audita a tentativa (companyId natural aqui,
+    // então AuditLog é suficiente — não precisa de PlatformAuditLog).
+    await logAudit(prisma, {
+      companyId: existing.companyId,
+      actorUserId: reviewer.id,
+      actorName: reviewer.name,
+      action: "platform_admin.claim_review_reassignment_blocked",
+      targetType: "CompanyClaimRequest",
+      targetId: claimRequestId,
+      metadata: { previousReviewerUserId: existing.reviewedByUserId },
+    }).catch(() => {});
+    throw new ConflictError(
+      "Esta solicitação já está em análise por outro Super Admin. Reatribuição explícita não está disponível nesta versão.",
+    );
+  }
 
   // Guarda contra corrida (dois Super Admin iniciando análise ao mesmo
-  // tempo) — mesmo padrão updateMany+contagem já usado em todo o serviço
-  // de claim: só a primeira a commitar de fato aplica.
+  // tempo, ambos partindo de PENDING) — mesmo padrão updateMany+contagem já
+  // usado em todo o serviço de claim: só a primeira a commitar de fato
+  // aplica.
   const { count } = await prisma.companyClaimRequest.updateMany({
     where: { id: claimRequestId, status: existing.status },
     data: { status: "UNDER_REVIEW", reviewedByUserId: reviewer.id, reviewedAt: new Date() },
   });
   if (count === 0) {
     // A outra transação venceu a corrida — não é um erro do ponto de vista
-    // do Super Admin (a claim está em análise de qualquer forma), mas
-    // também não foi ESTE revisor quem conseguiu — devolve o estado atual
-    // em vez de um erro técnico (spec §23: "segunda resposta sem erro
-    // técnico").
+    // técnico (a claim está em análise de qualquer forma), mas também não
+    // foi ESTE revisor quem conseguiu (spec §23: "segunda resposta sem erro
+    // técnico"). Devolve o estado atual sem lançar.
     const raced = await prisma.companyClaimRequest.findUniqueOrThrow({ where: { id: claimRequestId } });
-    return { claimId: raced.id, companyId: raced.companyId, status: raced.status, reassigned: raced.reviewedByUserId !== reviewer.id };
+    return { claimId: raced.id, companyId: raced.companyId, status: raced.status };
   }
 
   await logAudit(prisma, {
@@ -97,13 +117,11 @@ export async function startCompanyClaimReview(params: {
     targetType: "CompanyClaimRequest",
     targetId: claimRequestId,
     metadata: {
-      previousReviewerUserId,
-      reassigned,
       ...(reviewNote ? { reviewNote } : {}),
     },
   });
 
-  return { claimId: claimRequestId, companyId: existing.companyId, status: "UNDER_REVIEW", reassigned };
+  return { claimId: claimRequestId, companyId: existing.companyId, status: "UNDER_REVIEW" };
 }
 
 /**

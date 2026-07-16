@@ -212,13 +212,21 @@ describe("Autorização global do Portal Super Admin (§24, 1-9)", () => {
 // 10-15 — Bootstrap (grant/revoke)
 // =============================================================================
 
-describe("Bootstrap de Super Admin (§24, 10-15)", () => {
-  it("10 — grantPlatformAdmin cria PlatformUser SUPER_ADMIN para usuário existente", async () => {
+describe("Bootstrap de Super Admin (§24, 10-15 / Sprint 1.4D.1 §7-8)", () => {
+  const REASON = "Motivo de teste — nunca contém segredo.";
+
+  it("10 — grantPlatformAdmin (GRANTED_BY) cria PlatformUser SUPER_ADMIN para usuário existente", async () => {
     const anchor = await makeUnclaimedCompany("boot-grant");
+    const granterAnchor = await makeUnclaimedCompany("boot-grant-granter");
+    const granter = await makeSuperAdmin(granterAnchor.id, "boot-grant-granter-a");
     const user = await createTestUser(anchor.id, "boot-grant-u");
     platformAdminUserIds.push(user.id);
 
-    const result = await bootstrap.grantPlatformAdmin(user.email);
+    const result = await bootstrap.grantPlatformAdmin(user.email, {
+      kind: "GRANTED_BY",
+      grantedByEmail: granter.session.email,
+      reason: REASON,
+    });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.created).toBe(true);
@@ -226,15 +234,85 @@ describe("Bootstrap de Super Admin (§24, 10-15)", () => {
     const row = await prisma.platformUser.findUniqueOrThrow({ where: { userId: user.id } });
     expect(row.role).toBe("SUPER_ADMIN");
     expect(row.active).toBe(true);
+
+    const event = await prisma.platformAuditLog.findFirst({ where: { action: "platform_admin.access_granted", targetId: row.id } });
+    expect(event).not.toBeNull();
+    expect(event?.actorUserId).toBe(granter.session.id);
+    expect(event?.reason).toBe(REASON);
+  });
+
+  it("10b — grantPlatformAdmin (GRANTED_BY) rejeita concedente inexistente ou sem PlatformUser ativo", async () => {
+    const anchor = await makeUnclaimedCompany("boot-grant-bad-granter");
+    const user = await createTestUser(anchor.id, "boot-grant-bad-granter-u");
+    platformAdminUserIds.push(user.id);
+
+    const notFound = await bootstrap.grantPlatformAdmin(user.email, {
+      kind: "GRANTED_BY",
+      grantedByEmail: "__tenant_test__nao-existe-granter@example.test",
+      reason: REASON,
+    });
+    expect(notFound).toEqual({ ok: false, reason: "GRANTER_NOT_FOUND" });
+
+    const plainAnchor = await makeUnclaimedCompany("boot-grant-plain-granter");
+    const plainUser = await createTestUser(plainAnchor.id, "boot-grant-plain-granter-u");
+    const notActive = await bootstrap.grantPlatformAdmin(user.email, {
+      kind: "GRANTED_BY",
+      grantedByEmail: plainUser.email,
+      reason: REASON,
+    });
+    expect(notActive).toEqual({ ok: false, reason: "GRANTER_NOT_ACTIVE_SUPER_ADMIN" });
+  });
+
+  it("10c — grantPlatformAdmin (FIRST_BOOTSTRAP) é rejeitado quando já existe SUPER_ADMIN ativo", async () => {
+    const anchor = await makeUnclaimedCompany("boot-first-already-done");
+    await makeSuperAdmin(anchor.id, "boot-first-already-done-existing");
+    const targetAnchor = await makeUnclaimedCompany("boot-first-already-done-target");
+    const target = await createTestUser(targetAnchor.id, "boot-first-already-done-target-u");
+    platformAdminUserIds.push(target.id);
+
+    const result = await bootstrap.grantPlatformAdmin(target.email, { kind: "FIRST_BOOTSTRAP", reason: REASON });
+    expect(result).toEqual({ ok: false, reason: "FIRST_BOOTSTRAP_ALREADY_DONE" });
+  });
+
+  it("10d — grantPlatformAdmin (FIRST_BOOTSTRAP) cria o primeiro SUPER_ADMIN e audita platform_admin.first_bootstrap com actorUserId null, quando nenhum SUPER_ADMIN ativo existe", async () => {
+    const alreadyBootstrapped = await bootstrap.hasAnyActiveSuperAdmin();
+    const targetAnchor = await makeUnclaimedCompany("boot-first-success-target");
+    const target = await createTestUser(targetAnchor.id, "boot-first-success-target-u");
+    platformAdminUserIds.push(target.id);
+
+    const result = await bootstrap.grantPlatformAdmin(target.email, { kind: "FIRST_BOOTSTRAP", reason: REASON });
+
+    if (alreadyBootstrapped) {
+      // Ambiente com outros SUPER_ADMIN ativos (execução concorrente de
+      // suites) — o caminho FIRST_BOOTSTRAP é corretamente recusado; o
+      // sucesso do bootstrap em si já é coberto por 10c (rejeição) e pela
+      // lógica determinística abaixo quando o ambiente realmente está vazio.
+      expect(result).toEqual({ ok: false, reason: "FIRST_BOOTSTRAP_ALREADY_DONE" });
+      return;
+    }
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.created).toBe(true);
+
+    const event = await prisma.platformAuditLog.findFirst({
+      where: { action: "platform_admin.first_bootstrap", targetId: result.platformUserId },
+    });
+    expect(event).not.toBeNull();
+    expect(event?.actorUserId).toBeNull();
+    expect(event?.source).toBe("FIRST_BOOTSTRAP");
   });
 
   it("11 — grantPlatformAdmin é idempotente: chamar de novo sobre um já ativo não duplica nem erra", async () => {
     const anchor = await makeUnclaimedCompany("boot-grant-idempotent");
+    const granterAnchor = await makeUnclaimedCompany("boot-grant-idempotent-granter");
+    const granter = await makeSuperAdmin(granterAnchor.id, "boot-grant-idempotent-granter-a");
     const user = await createTestUser(anchor.id, "boot-grant-idempotent-u");
     platformAdminUserIds.push(user.id);
+    const context = { kind: "GRANTED_BY" as const, grantedByEmail: granter.session.email, reason: REASON };
 
-    const first = await bootstrap.grantPlatformAdmin(user.email);
-    const second = await bootstrap.grantPlatformAdmin(user.email);
+    const first = await bootstrap.grantPlatformAdmin(user.email, context);
+    const second = await bootstrap.grantPlatformAdmin(user.email, context);
     expect(first.ok && second.ok).toBe(true);
     if (!first.ok || !second.ok) return;
     expect(second.created).toBe(false);
@@ -242,16 +320,22 @@ describe("Bootstrap de Super Admin (§24, 10-15)", () => {
 
     const count = await prisma.platformUser.count({ where: { userId: user.id } });
     expect(count).toBe(1);
+    // Idempotente: a segunda chamada não gera um segundo evento persistente.
+    const events = await prisma.platformAuditLog.count({ where: { action: "platform_admin.access_granted", targetId: first.platformUserId } });
+    expect(events).toBe(1);
   });
 
-  it("11b — grantPlatformAdmin reativa (nunca duplica) um PlatformUser previamente revogado", async () => {
+  it("11b — grantPlatformAdmin reativa (nunca duplica) um PlatformUser previamente revogado e audita access_reactivated", async () => {
     const anchor = await makeUnclaimedCompany("boot-grant-reactivate");
+    const granterAnchor = await makeUnclaimedCompany("boot-grant-reactivate-granter");
+    const granter = await makeSuperAdmin(granterAnchor.id, "boot-grant-reactivate-granter-a");
     const user = await createTestUser(anchor.id, "boot-grant-reactivate-u");
     platformAdminUserIds.push(user.id);
+    const context = { kind: "GRANTED_BY" as const, grantedByEmail: granter.session.email, reason: REASON };
 
-    await bootstrap.grantPlatformAdmin(user.email);
-    await bootstrap.revokePlatformAdmin(user.email, { force: true });
-    const result = await bootstrap.grantPlatformAdmin(user.email);
+    await bootstrap.grantPlatformAdmin(user.email, context);
+    await bootstrap.revokePlatformAdmin(user.email, { reason: REASON, allowNoActiveSuperAdmin: true });
+    const result = await bootstrap.grantPlatformAdmin(user.email, context);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.reactivated).toBe(true);
@@ -260,56 +344,70 @@ describe("Bootstrap de Super Admin (§24, 10-15)", () => {
     expect(count).toBe(1);
     const row = await prisma.platformUser.findUniqueOrThrow({ where: { userId: user.id } });
     expect(row.active).toBe(true);
+
+    const event = await prisma.platformAuditLog.findFirst({ where: { action: "platform_admin.access_reactivated", targetId: row.id } });
+    expect(event).not.toBeNull();
   });
 
   it("12 — grantPlatformAdmin para e-mail inexistente retorna USER_NOT_FOUND, nunca cria usuário novo", async () => {
-    const result = await bootstrap.grantPlatformAdmin("__tenant_test__nao-existe@example.test");
+    const granterAnchor = await makeUnclaimedCompany("boot-grant-notfound-granter");
+    const granter = await makeSuperAdmin(granterAnchor.id, "boot-grant-notfound-granter-a");
+    const result = await bootstrap.grantPlatformAdmin("__tenant_test__nao-existe@example.test", {
+      kind: "GRANTED_BY",
+      grantedByEmail: granter.session.email,
+      reason: REASON,
+    });
     expect(result).toEqual({ ok: false, reason: "USER_NOT_FOUND" });
   });
 
-  it("13 — revokePlatformAdmin desativa (active=false); nunca faz hard delete da linha", async () => {
+  it("13 — revokePlatformAdmin desativa (active=false); nunca faz hard delete da linha; audita access_revoked", async () => {
     const anchor = await makeUnclaimedCompany("boot-revoke");
     const { session, platformUser } = await makeSuperAdmin(anchor.id, "boot-revoke-a");
     // Segundo Super Admin para não esbarrar na proteção de "último ativo".
     await makeSuperAdmin(anchor.id, "boot-revoke-b");
 
-    const result = await bootstrap.revokePlatformAdmin(session.email);
+    const result = await bootstrap.revokePlatformAdmin(session.email, { reason: REASON });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.alreadyInactive).toBe(false);
 
     const row = await prisma.platformUser.findUniqueOrThrow({ where: { id: platformUser.id } });
     expect(row.active).toBe(false);
+
+    const event = await prisma.platformAuditLog.findFirst({ where: { action: "platform_admin.access_revoked", targetId: platformUser.id } });
+    expect(event).not.toBeNull();
+    expect(event?.reason).toBe(REASON);
   });
 
-  it("14 — revokePlatformAdmin bloqueia remover o ÚLTIMO SUPER_ADMIN ativo sem --force", async () => {
+  it("14 — revokePlatformAdmin bloqueia remover o ÚLTIMO SUPER_ADMIN ativo sem --allow-no-active-super-admin, e audita a tentativa bloqueada", async () => {
     const anchor = await makeUnclaimedCompany("boot-revoke-last");
     const { session } = await makeSuperAdmin(anchor.id, "boot-revoke-last-a");
 
-    // Garante que este é de fato o único SUPER_ADMIN ativo no momento do
-    // teste (outros testes deste arquivo criam/revogam os seus próprios).
     const otherActive = await prisma.platformUser.count({
       where: { role: "SUPER_ADMIN", active: true, userId: { not: session.id } },
     });
-    if (otherActive > 0) {
-      // Ambiente com outros SUPER_ADMIN ativos (execução concorrente de
-      // suites) — o teste ainda é válido comparando antes/depois, só não
-      // pode afirmar "o único do banco".
-    }
 
-    const result = await bootstrap.revokePlatformAdmin(session.email, otherActive > 0 ? { force: true } : {});
+    const result = await bootstrap.revokePlatformAdmin(
+      session.email,
+      otherActive > 0 ? { reason: REASON, allowNoActiveSuperAdmin: true } : { reason: REASON },
+    );
     if (otherActive === 0) {
       expect(result).toEqual({ ok: false, reason: "LAST_ACTIVE_SUPER_ADMIN" });
       const row = await prisma.platformUser.findUniqueOrThrow({ where: { userId: session.id } });
       expect(row.active).toBe(true);
+
+      const blockedEvent = await prisma.platformAuditLog.findFirst({
+        where: { action: "platform_admin.last_admin_revocation_blocked", targetId: row.id },
+      });
+      expect(blockedEvent).not.toBeNull();
     }
   });
 
-  it("15 — revokePlatformAdmin com force=true permite remover mesmo sendo o último SUPER_ADMIN ativo", async () => {
+  it("15 — revokePlatformAdmin com allowNoActiveSuperAdmin=true permite remover mesmo sendo o último SUPER_ADMIN ativo", async () => {
     const anchor = await makeUnclaimedCompany("boot-revoke-force");
     const { session } = await makeSuperAdmin(anchor.id, "boot-revoke-force-a");
 
-    const result = await bootstrap.revokePlatformAdmin(session.email, { force: true });
+    const result = await bootstrap.revokePlatformAdmin(session.email, { reason: REASON, allowNoActiveSuperAdmin: true });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
@@ -511,7 +609,6 @@ describe("Início de análise — startCompanyClaimReview (§24, 27-30)", () => 
 
     const result = await claimsLib.startCompanyClaimReview({ claimRequestId: claim.id, reviewer: { id: reviewer.id, name: reviewer.name } });
     expect(result.status).toBe("UNDER_REVIEW");
-    expect(result.reassigned).toBe(false);
 
     const updated = await prisma.companyClaimRequest.findUniqueOrThrow({ where: { id: claim.id } });
     expect(updated.status).toBe("UNDER_REVIEW");
@@ -527,31 +624,30 @@ describe("Início de análise — startCompanyClaimReview (§24, 27-30)", () => 
     const countAfterFirst = await prisma.auditLog.count({ where: { action: "platform_admin.claim_review_started", targetId: claim.id } });
     const second = await claimsLib.startCompanyClaimReview({ claimRequestId: claim.id, reviewer: { id: reviewer.id, name: reviewer.name } });
     expect(second.status).toBe("UNDER_REVIEW");
-    expect(second.reassigned).toBe(false);
     const countAfterSecond = await prisma.auditLog.count({ where: { action: "platform_admin.claim_review_started", targetId: claim.id } });
     expect(countAfterSecond).toBe(countAfterFirst);
   });
 
-  it("29 — reatribuir de outro revisor é permitido mas NUNCA silencioso (sempre audita reassigned=true)", async () => {
+  it("29 — Sprint SST 1.4D.1 §9: outro revisor NUNCA sobrescreve silenciosamente — start-review é bloqueado (ConflictError) e a tentativa é auditada", async () => {
     const { claim } = await makePendingClaim("review-reassign");
     const anchor = await makeUnclaimedCompany("review-reassign-rev");
     const reviewerA = (await makeSuperAdmin(anchor.id, "review-reassign-rev-a")).session;
     const reviewerB = (await makeSuperAdmin(anchor.id, "review-reassign-rev-b")).session;
 
     await claimsLib.startCompanyClaimReview({ claimRequestId: claim.id, reviewer: { id: reviewerA.id, name: reviewerA.name } });
-    const result = await claimsLib.startCompanyClaimReview({ claimRequestId: claim.id, reviewer: { id: reviewerB.id, name: reviewerB.name } });
-    expect(result.reassigned).toBe(true);
+    await expect(
+      claimsLib.startCompanyClaimReview({ claimRequestId: claim.id, reviewer: { id: reviewerB.id, name: reviewerB.name } }),
+    ).rejects.toBeInstanceOf(ConflictError);
 
+    // Estado nunca muda — continua atribuída ao revisor original.
     const updated = await prisma.companyClaimRequest.findUniqueOrThrow({ where: { id: claim.id } });
-    expect(updated.reviewedByUserId).toBe(reviewerB.id);
+    expect(updated.reviewedByUserId).toBe(reviewerA.id);
 
     const event = await prisma.auditLog.findFirst({
-      where: { action: "platform_admin.claim_review_started", targetId: claim.id, actorUserId: reviewerB.id },
-      orderBy: { createdAt: "desc" },
+      where: { action: "platform_admin.claim_review_reassignment_blocked", targetId: claim.id, actorUserId: reviewerB.id },
     });
     expect(event).not.toBeNull();
     expect((event?.metadata as { previousReviewerUserId?: string })?.previousReviewerUserId).toBe(reviewerA.id);
-    expect((event?.metadata as { reassigned?: boolean })?.reassigned).toBe(true);
   });
 
   it("30 — iniciar análise fora de PENDING/UNDER_REVIEW é rejeitado (ConflictError) e audita invalid_claim_transition", async () => {
