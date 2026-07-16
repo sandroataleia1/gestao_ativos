@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -159,18 +160,20 @@ export function NotificationBell({
         <div aria-live="polite" className="sr-only">
           {liveMessage}
         </div>
-        <DropdownMenuLabel className="flex items-center justify-between px-3 py-2">
-          <span>Notificações</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-auto px-2 py-1 text-xs"
-            onClick={markAllRead}
-            disabled={unreadCount === 0}
-          >
-            Marcar todas como lidas
-          </Button>
-        </DropdownMenuLabel>
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="flex items-center justify-between px-3 py-2">
+            <span>Notificações</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-auto px-2 py-1 text-xs"
+              onClick={markAllRead}
+              disabled={unreadCount === 0}
+            >
+              Marcar todas como lidas
+            </Button>
+          </DropdownMenuLabel>
+        </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <div className="max-h-80 overflow-y-auto">
           {error ? (
