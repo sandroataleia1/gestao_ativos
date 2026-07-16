@@ -17,7 +17,7 @@ import {
   type TestSessionUser,
 } from "@/tests/helpers/db";
 import { mockCookies, resetCookieStore } from "@/tests/helpers/mock-request-context";
-import { createNotification } from "@/lib/notifications";
+import { createNotification, resolveNotificationsForEntity } from "@/lib/notifications";
 import {
   listCompanyNotificationsForBell,
   countCompanyUnreadNotifications,
@@ -30,7 +30,13 @@ import { markNotificationRead, markAllNotificationsRead, dismissNotification } f
 import { companyNotificationScope, sstNotificationScope, platformNotificationScope } from "@/lib/notifications-scope";
 import { requestAccessToCompany } from "@/lib/sst-company-provisioning";
 import { updateProviderLinkStatus } from "@/lib/sst-providers";
-import { createOrReuseClaimRequest, approveCompanyClaimRequest, rejectCompanyClaimRequest } from "@/lib/company-claim-request";
+import {
+  createOrReuseClaimRequest,
+  approveCompanyClaimRequest,
+  rejectCompanyClaimRequest,
+  cancelCompanyClaimRequest,
+} from "@/lib/company-claim-request";
+import { startCompanyClaimReview } from "@/lib/platform-admin-claims";
 import { resolveClaimDecision } from "@/lib/company-claim";
 import { NotFoundError } from "@/lib/api-errors";
 
@@ -646,6 +652,474 @@ describe("Eventos de claim", () => {
 
     const updatedLink = await prisma.sstProviderCompany.findUniqueOrThrow({ where: { id: link.id } });
     expect(updatedLink.status).toBe("REVOKED");
+  });
+});
+
+// =============================================================================
+// Sprint SST 1.4E.1 — reabertura de claim gera um NOVO ciclo institucional
+// =============================================================================
+//
+// Bug corrigido: `notifyPlatformClaimRequested` reutilizava a dedupeKey
+// `platform:claim-requested:{claimRequestId}` (sem versão) — ao reabrir uma
+// claim REJECTED/CANCELLED/EXPIRED (mesma linha, mesmo id, ver
+// `lib/company-claim-request.ts:createOrReuseClaimRequest`), a chamada
+// encontrava a Notification antiga (já com `resolvedAt` preenchido) e a
+// devolvia como está, nunca zerando `resolvedAt` — o Super Admin não via a
+// claim reaberta como pendente. Corrigido incluindo `claimVersion` (=
+// `claim.requestedAt.getTime()`, já computado e usado por
+// `notifyProviderCompanyClaimStarted` no mesmo bloco) na dedupeKey: cada
+// ciclo legítimo passa a gerar uma Notification NOVA, nunca reabre a antiga
+// em-place — preserva histórico e nunca herda receipts antigos.
+
+describe("Sprint SST 1.4E.1 — reabertura de claim gera novo ciclo institucional", () => {
+  async function makeUnclaimedCompany(label: string) {
+    const company = await makeCompany(label);
+    await prisma.company.update({ where: { id: company.id }, data: { controlStatus: "UNCLAIMED" } });
+    return company;
+  }
+
+  function platformClaimNotifs(claimRequestId: string) {
+    return prisma.notification.findMany({
+      where: { audience: "PLATFORM", type: "PLATFORM_COMPANY_CLAIM_REQUESTED", entityId: claimRequestId },
+      orderBy: { createdAt: "asc" },
+    });
+  }
+
+  it("REJECTED -> PENDING: a claim reabre na MESMA linha, mas gera uma NOVA Notification pendente; a antiga permanece resolvida e intacta", async () => {
+    const company = await makeUnclaimedCompany("notif-reopen-rejected");
+    const requester = await createTestUser(company.id, "notif-reopen-rejected-u");
+    const reviewer = await createTestUser(company.id, "notif-reopen-rejected-rev");
+
+    const { claim } = await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: requester.id, name: requester.name },
+      origin: "SELF_REGISTRATION",
+    });
+
+    const [firstNotif] = await platformClaimNotifs(claim.id);
+    expect(firstNotif.resolvedAt).toBeNull();
+
+    await rejectCompanyClaimRequest({ claimRequestId: claim.id, reviewer: { id: reviewer.id, name: reviewer.name } });
+    const firstAfterReject = await prisma.notification.findUniqueOrThrow({ where: { id: firstNotif.id } });
+    expect(firstAfterReject.resolvedAt).not.toBeNull();
+
+    const { claim: reopened, reused } = await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: requester.id, name: requester.name },
+      origin: "SELF_REGISTRATION",
+    });
+    expect(reopened.id).toBe(claim.id); // nunca uma segunda CompanyClaimRequest — mesma linha reaberta
+    expect(reopened.status).toBe("PENDING");
+    expect(reused).toBe(true);
+
+    const allNotifs = await platformClaimNotifs(claim.id);
+    expect(allNotifs).toHaveLength(2); // histórico com os DOIS ciclos, nunca só 1
+    const [oldNotif, newNotif] = allNotifs;
+    expect(oldNotif.id).toBe(firstNotif.id);
+    expect(oldNotif.resolvedAt).not.toBeNull(); // preservada, nunca reaberta em-place
+    expect(newNotif.id).not.toBe(oldNotif.id);
+    expect(newNotif.resolvedAt).toBeNull(); // novo ciclo, pendente
+    expect(newNotif.dedupeKey).not.toBe(oldNotif.dedupeKey);
+    expect(newNotif.title).toBe(oldNotif.title);
+    expect(newNotif.message).toBe(oldNotif.message);
+
+    const count = await countPlatformUnreadNotifications({ userId: "any-user-id" });
+    expect(count).toBeGreaterThan(0);
+    const bellItems = await listPlatformNotificationsForBell({ userId: "any-user-id" });
+    expect(bellItems.some((n) => n.id === newNotif.id)).toBe(true);
+  });
+
+  it("CANCELLED -> PENDING: mesmo comportamento — nova Notification pendente, antiga preservada resolvida", async () => {
+    const company = await makeUnclaimedCompany("notif-reopen-cancelled");
+    const requester = await createTestUser(company.id, "notif-reopen-cancelled-u");
+
+    const { claim } = await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: requester.id, name: requester.name },
+      origin: "SELF_REGISTRATION",
+    });
+    const [firstNotif] = await platformClaimNotifs(claim.id);
+
+    await cancelCompanyClaimRequest({ claimRequestId: claim.id, actor: { id: requester.id, name: requester.name } });
+    const firstAfterCancel = await prisma.notification.findUniqueOrThrow({ where: { id: firstNotif.id } });
+    expect(firstAfterCancel.resolvedAt).not.toBeNull();
+
+    const { claim: reopened } = await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: requester.id, name: requester.name },
+      origin: "SELF_REGISTRATION",
+    });
+    expect(reopened.id).toBe(claim.id);
+    expect(reopened.status).toBe("PENDING");
+
+    const allNotifs = await platformClaimNotifs(claim.id);
+    expect(allNotifs).toHaveLength(2);
+    expect(allNotifs[0].resolvedAt).not.toBeNull();
+    expect(allNotifs[1].resolvedAt).toBeNull();
+    expect(allNotifs[1].dedupeKey).not.toBe(allNotifs[0].dedupeKey);
+  });
+
+  it("EXPIRED -> PENDING: mesmo comportamento — o serviço real não possui expiração automática (§21 do spec 1.4E.1), então o status é ajustado diretamente para simular o ciclo terminal", async () => {
+    const company = await makeUnclaimedCompany("notif-reopen-expired");
+    const requester = await createTestUser(company.id, "notif-reopen-expired-u");
+
+    const { claim } = await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: requester.id, name: requester.name },
+      origin: "SELF_REGISTRATION",
+    });
+    const [firstNotif] = await platformClaimNotifs(claim.id);
+
+    // Nenhum job de expiração existe hoje — simula o estado terminal
+    // diretamente (mesmo efeito de resolução que rejectCompanyClaimRequest/
+    // cancelCompanyClaimRequest produzem sobre a Notification).
+    await prisma.companyClaimRequest.update({ where: { id: claim.id }, data: { status: "EXPIRED", reviewedAt: new Date() } });
+    await resolveNotificationsForEntity("CompanyClaimRequest", claim.id);
+    const firstAfterExpire = await prisma.notification.findUniqueOrThrow({ where: { id: firstNotif.id } });
+    expect(firstAfterExpire.resolvedAt).not.toBeNull();
+
+    const { claim: reopened } = await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: requester.id, name: requester.name },
+      origin: "SELF_REGISTRATION",
+    });
+    expect(reopened.id).toBe(claim.id);
+    expect(reopened.status).toBe("PENDING");
+
+    const allNotifs = await platformClaimNotifs(claim.id);
+    expect(allNotifs).toHaveLength(2);
+    expect(allNotifs[0].resolvedAt).not.toBeNull();
+    expect(allNotifs[1].resolvedAt).toBeNull();
+  });
+
+  it("retry dentro do MESMO ciclo (PENDING) não cria nova Notification nem novo ciclo", async () => {
+    const company = await makeUnclaimedCompany("notif-reopen-retry-pending");
+    const requester = await createTestUser(company.id, "notif-reopen-retry-pending-u");
+
+    const { claim } = await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: requester.id, name: requester.name },
+      origin: "SELF_REGISTRATION",
+    });
+    const { claim: again, reused } = await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: requester.id, name: requester.name },
+      origin: "SELF_REGISTRATION",
+    });
+    expect(again.id).toBe(claim.id);
+    expect(reused).toBe(true);
+    expect(again.status).toBe("PENDING");
+
+    const allNotifs = await platformClaimNotifs(claim.id);
+    expect(allNotifs).toHaveLength(1);
+    expect(allNotifs[0].resolvedAt).toBeNull();
+  });
+
+  it("retry dentro do MESMO ciclo (UNDER_REVIEW) não cria nova Notification nem novo ciclo", async () => {
+    const company = await makeUnclaimedCompany("notif-reopen-retry-review");
+    const requester = await createTestUser(company.id, "notif-reopen-retry-review-u");
+    const reviewerUser = await createTestUser(company.id, "notif-reopen-retry-review-rev");
+    await createTestPlatformUser({ userId: reviewerUser.id });
+    platformUserIds.push(reviewerUser.id);
+
+    const { claim } = await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: requester.id, name: requester.name },
+      origin: "SELF_REGISTRATION",
+    });
+    await startCompanyClaimReview({ claimRequestId: claim.id, reviewer: { id: reviewerUser.id, name: reviewerUser.name } });
+
+    const { claim: again, reused } = await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: requester.id, name: requester.name },
+      origin: "SELF_REGISTRATION",
+    });
+    expect(again.id).toBe(claim.id);
+    expect(reused).toBe(true);
+    expect(again.status).toBe("UNDER_REVIEW");
+
+    const allNotifs = await platformClaimNotifs(claim.id);
+    expect(allNotifs).toHaveLength(1);
+    expect(allNotifs[0].resolvedAt).toBeNull();
+  });
+
+  it("resolução do ciclo NOVO não altera a Notification do ciclo antigo (histórico preservado)", async () => {
+    const company = await makeUnclaimedCompany("notif-reopen-resolve-new");
+    const requester = await createTestUser(company.id, "notif-reopen-resolve-new-u");
+    const reviewer = await createTestUser(company.id, "notif-reopen-resolve-new-rev");
+
+    const { claim } = await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: requester.id, name: requester.name },
+      origin: "SELF_REGISTRATION",
+    });
+    await rejectCompanyClaimRequest({ claimRequestId: claim.id, reviewer: { id: reviewer.id, name: reviewer.name } });
+    await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: requester.id, name: requester.name },
+      origin: "SELF_REGISTRATION",
+    });
+
+    const beforeApprove = await platformClaimNotifs(claim.id);
+    expect(beforeApprove).toHaveLength(2);
+    const oldResolvedAtBefore = beforeApprove[0].resolvedAt;
+
+    await approveCompanyClaimRequest({ claimRequestId: claim.id, reviewer: { id: reviewer.id, name: reviewer.name } });
+
+    const afterApprove = await platformClaimNotifs(claim.id);
+    expect(afterApprove).toHaveLength(2); // nenhuma linha apagada
+    expect(afterApprove[0].resolvedAt?.getTime()).toBe(oldResolvedAtBefore?.getTime()); // ciclo antigo inalterado
+    expect(afterApprove[1].resolvedAt).not.toBeNull(); // ciclo novo agora resolvido
+    // Página "Todas" consegue distinguir os dois eventos pelo createdAt.
+    expect(afterApprove[1].createdAt.getTime()).toBeGreaterThan(afterApprove[0].createdAt.getTime());
+  });
+
+  it("receipts entre ciclos: leitura/dispensa do ciclo antigo nunca afetam a Notification do ciclo novo", async () => {
+    const company = await makeUnclaimedCompany("notif-reopen-receipts");
+    const requester = await createTestUser(company.id, "notif-reopen-receipts-u");
+    const reviewer = await createTestUser(company.id, "notif-reopen-receipts-rev");
+    const superAdminA = await createTestUser(company.id, "notif-reopen-receipts-admin-a");
+    const superAdminB = await createTestUser(company.id, "notif-reopen-receipts-admin-b");
+    await createTestPlatformUser({ userId: superAdminA.id });
+    await createTestPlatformUser({ userId: superAdminB.id });
+    platformUserIds.push(superAdminA.id, superAdminB.id);
+
+    const { claim } = await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: requester.id, name: requester.name },
+      origin: "SELF_REGISTRATION",
+    });
+    const [firstNotif] = await platformClaimNotifs(claim.id);
+
+    // A lê; B dispensa — ambos sobre o ciclo ANTIGO.
+    await markNotificationRead(superAdminA.id, firstNotif.id, platformNotificationScope());
+    await dismissNotification(superAdminB.id, firstNotif.id, platformNotificationScope());
+
+    await rejectCompanyClaimRequest({ claimRequestId: claim.id, reviewer: { id: reviewer.id, name: reviewer.name } });
+    await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: requester.id, name: requester.name },
+      origin: "SELF_REGISTRATION",
+    });
+
+    const [, newNotif] = await platformClaimNotifs(claim.id);
+
+    // Receipts do ciclo antigo permanecem intactos.
+    const oldReceiptA = await prisma.notificationReceipt.findUnique({ where: { notificationId_userId: { notificationId: firstNotif.id, userId: superAdminA.id } } });
+    expect(oldReceiptA?.readAt).not.toBeNull();
+    const oldReceiptB = await prisma.notificationReceipt.findUnique({ where: { notificationId_userId: { notificationId: firstNotif.id, userId: superAdminB.id } } });
+    expect(oldReceiptB?.dismissedAt).not.toBeNull();
+
+    // A nova Notification nunca herda receipts — nenhum registro para A/B ainda.
+    const newReceiptsCount = await prisma.notificationReceipt.count({ where: { notificationId: newNotif.id } });
+    expect(newReceiptsCount).toBe(0);
+
+    // A (que leu a antiga) vê a NOVA como não lida no sino.
+    const bellForA = await listPlatformNotificationsForBell({ userId: superAdminA.id });
+    const newInBellForA = bellForA.find((n) => n.id === newNotif.id);
+    expect(newInBellForA).toBeDefined();
+    expect(newInBellForA?.isRead).toBe(false);
+
+    // B (que dispensou a antiga) também vê a NOVA no sino — dismiss antigo não a oculta.
+    const bellForB = await listPlatformNotificationsForBell({ userId: superAdminB.id });
+    expect(bellForB.some((n) => n.id === newNotif.id)).toBe(true);
+
+    // read-all do ciclo antigo (já lido/dispensado) não interfere — marcar
+    // todas como lidas agora só afeta a nova, nunca reescreve a antiga.
+    const markedCount = await markAllNotificationsRead(superAdminA.id, platformNotificationScope());
+    expect(markedCount).toBeGreaterThan(0);
+    const newReceiptAAfter = await prisma.notificationReceipt.findUnique({ where: { notificationId_userId: { notificationId: newNotif.id, userId: superAdminA.id } } });
+    expect(newReceiptAAfter?.readAt).not.toBeNull();
+    const oldReceiptAAfter = await prisma.notificationReceipt.findUnique({ where: { notificationId_userId: { notificationId: firstNotif.id, userId: superAdminA.id } } });
+    expect(oldReceiptAAfter?.readAt?.getTime()).toBe(oldReceiptA?.readAt?.getTime()); // nunca reescrito
+  });
+
+  it("duas reaberturas concorrentes da mesma claim terminal geram um único ciclo novo (nenhuma membership/vínculo SST alterado, nenhuma transação abortada)", async () => {
+    const company = await makeUnclaimedCompany("notif-reopen-concurrent");
+    const requester = await createTestUser(company.id, "notif-reopen-concurrent-u");
+    const reviewer = await createTestUser(company.id, "notif-reopen-concurrent-rev");
+
+    const { claim } = await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: requester.id, name: requester.name },
+      origin: "SELF_REGISTRATION",
+    });
+    await rejectCompanyClaimRequest({ claimRequestId: claim.id, reviewer: { id: reviewer.id, name: reviewer.name } });
+
+    const results = await Promise.allSettled([
+      createOrReuseClaimRequest({ companyId: company.id, requester: { id: requester.id, name: requester.name }, origin: "SELF_REGISTRATION" }),
+      createOrReuseClaimRequest({ companyId: company.id, requester: { id: requester.id, name: requester.name }, origin: "SELF_REGISTRATION" }),
+    ]);
+    expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+
+    const finalClaim = await prisma.companyClaimRequest.findUniqueOrThrow({ where: { id: claim.id } });
+    expect(finalClaim.status).toBe("PENDING");
+
+    const allNotifs = await platformClaimNotifs(claim.id);
+    // Ciclo antigo (resolvido) + exatamente UM ciclo novo (pendente) — nunca dois.
+    expect(allNotifs).toHaveLength(2);
+    const pendingOnes = allNotifs.filter((n) => n.resolvedAt === null);
+    expect(pendingOnes).toHaveLength(1);
+
+    const membershipCount = await prisma.companyMembership.count({ where: { companyId: company.id, userId: requester.id } });
+    expect(membershipCount).toBe(0); // reabertura nunca concede acesso por si só
+  });
+});
+
+// =============================================================================
+// Sprint SST 1.4E.1 — idempotência transacional de createNotification
+// =============================================================================
+
+describe("Sprint SST 1.4E.1 — idempotência transacional de createNotification", () => {
+  it("duas transações interativas concorrentes com a mesma dedupeKey: nenhuma é abortada, ambas permanecem utilizáveis, uma única Notification é criada", async () => {
+    const company = await makeCompany("notif-tx-race");
+    const key = `test:tx-race:${company.id}`;
+
+    // Sentinela: uma tabela qualquer já usada nos testes, gravada DEPOIS de
+    // createNotification, na MESMA transação — se createNotification tivesse
+    // abortado a transação (P2002 não tratado), esta escrita também falharia.
+    async function attempt(sentinelLabel: string) {
+      return prisma.$transaction(async (tx) => {
+        const result = await createNotification(
+          { audience: "COMPANY", companyId: company.id, type: "COMPANY_SST_ACCESS_REQUESTED", title: "t", message: "m", dedupeKey: key },
+          tx,
+        );
+        const sentinel = await tx.auditLog.create({
+          data: {
+            companyId: company.id,
+            actorName: "test-sentinel",
+            action: "test_sentinel.tx_race", // escrita qualquer, só para provar que a transação continua utilizável após createNotification
+            targetType: "Notification",
+            targetId: result.notification.id,
+            metadata: { sentinelLabel },
+          },
+        });
+        return { dedupeHit: result.dedupeHit, sentinelId: sentinel.id };
+      });
+    }
+
+    const results = await Promise.allSettled([attempt("A"), attempt("B")]);
+
+    expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+    const fulfilled = results as PromiseFulfilledResult<{ dedupeHit: boolean; sentinelId: string }>[];
+    // Nenhuma resposta expõe P2002 (nenhuma rejeitada — já garantido pelo
+    // `every fulfilled` acima; reforça a intenção do teste).
+    expect(results.some((r) => r.status === "rejected")).toBe(false);
+
+    const dedupeHits = fulfilled.map((r) => r.value.dedupeHit);
+    expect(dedupeHits.filter((h) => h === false)).toHaveLength(1); // exatamente uma inseriu
+    expect(dedupeHits.filter((h) => h === true)).toHaveLength(1); // a outra encontrou a existente
+
+    // Ambas as escritas sentinela foram persistidas — prova de que NENHUMA
+    // das duas transações foi abortada pela colisão de dedupe.
+    const sentinelIds = fulfilled.map((r) => r.value.sentinelId);
+    const sentinelRows = await prisma.auditLog.findMany({ where: { id: { in: sentinelIds } } });
+    expect(sentinelRows).toHaveLength(2);
+
+    const notifCount = await prisma.notification.count({ where: { audience: "COMPANY", dedupeKey: key } });
+    expect(notifCount).toBe(1);
+  });
+
+  it("dedupe-hit nunca sobrescreve conteúdo nem remove resolvedAt (retry representa o MESMO evento, não uma edição)", async () => {
+    const company = await makeCompany("notif-tx-dedupe-content");
+    const key = `test:tx-dedupe-content:${company.id}`;
+
+    const first = await createNotification({
+      audience: "COMPANY",
+      companyId: company.id,
+      type: "COMPANY_SST_ACCESS_REQUESTED",
+      title: "Título original",
+      message: "Mensagem original",
+      actionKey: "COMPANY_REVIEW_SST_ACCESS",
+      dedupeKey: key,
+      metadata: { note: "original" },
+    });
+    expect(first.dedupeHit).toBe(false);
+
+    await prisma.notification.update({ where: { id: first.notification.id }, data: { resolvedAt: new Date() } });
+
+    const second = await createNotification({
+      audience: "COMPANY",
+      companyId: company.id,
+      type: "COMPANY_SST_ACCESS_REQUESTED",
+      title: "Título DIFERENTE (nunca deveria sobrescrever)",
+      message: "Mensagem DIFERENTE (nunca deveria sobrescrever)",
+      actionKey: null,
+      dedupeKey: key,
+      metadata: { note: "diferente" },
+    });
+    expect(second.dedupeHit).toBe(true);
+    expect(second.notification.id).toBe(first.notification.id);
+    expect(second.notification.title).toBe("Título original");
+    expect(second.notification.message).toBe("Mensagem original");
+    expect(second.notification.actionKey).toBe("COMPANY_REVIEW_SST_ACCESS");
+    expect((second.notification.metadata as Record<string, unknown> | null)?.note).toBe("original");
+    expect(second.notification.resolvedAt).not.toBeNull(); // nunca removido por um dedupe-hit
+  });
+});
+
+// =============================================================================
+// Sprint SST 1.4E.1 — disputa (PLATFORM_COMPANY_CLAIM_DISPUTED) — auditoria
+// =============================================================================
+//
+// Auditoria confirmou que a disputa JÁ é versionada corretamente
+// (`disputeVersion` = `Company.updatedAt` no momento exato em que
+// `controlStatus` transiciona para DISPUTED, sempre um valor novo — a
+// disputa só é reaberta depois de reverter para UNCLAIMED). Testes abaixo
+// PROVAM esse comportamento (não presumido do código-fonte).
+
+describe("Sprint SST 1.4E.1 — disputa não apresenta o mesmo silenciamento", () => {
+  async function makeUnclaimedCompany(label: string) {
+    const company = await makeCompany(label);
+    await prisma.company.update({ where: { id: company.id }, data: { controlStatus: "UNCLAIMED" } });
+    return company;
+  }
+
+  it("disputa repetida dentro do MESMO ciclo (terceiro solicitante) não duplica a Notification de disputa", async () => {
+    const company = await makeUnclaimedCompany("notif-dispute-repeat");
+    const requesterA = await createTestUser(company.id, "notif-dispute-repeat-a");
+    const requesterB = await createTestUser(company.id, "notif-dispute-repeat-b");
+    const requesterC = await createTestUser(company.id, "notif-dispute-repeat-c");
+
+    await createOrReuseClaimRequest({ companyId: company.id, requester: { id: requesterA.id, name: requesterA.name }, origin: "SELF_REGISTRATION" });
+    await createOrReuseClaimRequest({ companyId: company.id, requester: { id: requesterB.id, name: requesterB.name }, origin: "SELF_REGISTRATION" });
+    await createOrReuseClaimRequest({ companyId: company.id, requester: { id: requesterC.id, name: requesterC.name }, origin: "SELF_REGISTRATION" });
+
+    const disputes = await prisma.notification.findMany({ where: { audience: "PLATFORM", type: "PLATFORM_COMPANY_CLAIM_DISPUTED", entityId: company.id } });
+    expect(disputes).toHaveLength(1);
+  });
+
+  it("uma disputa FUTURA legítima (após a primeira ser totalmente resolvida) gera uma NOVA Notification, nunca silenciada pela resolução anterior", async () => {
+    const company = await makeUnclaimedCompany("notif-dispute-future");
+    const requesterA = await createTestUser(company.id, "notif-dispute-future-a");
+    const requesterB = await createTestUser(company.id, "notif-dispute-future-b");
+    const reviewer = await createTestUser(company.id, "notif-dispute-future-rev");
+
+    const { claim: claimA } = await createOrReuseClaimRequest({ companyId: company.id, requester: { id: requesterA.id, name: requesterA.name }, origin: "SELF_REGISTRATION" });
+    const { claim: claimB } = await createOrReuseClaimRequest({ companyId: company.id, requester: { id: requesterB.id, name: requesterB.name }, origin: "SELF_REGISTRATION" });
+
+    const firstDispute = await prisma.notification.findFirstOrThrow({ where: { audience: "PLATFORM", type: "PLATFORM_COMPANY_CLAIM_DISPUTED", entityId: company.id } });
+
+    // Resolve a disputa rejeitando AMBAS as claims — a empresa volta a UNCLAIMED.
+    await rejectCompanyClaimRequest({ claimRequestId: claimA.id, reviewer: { id: reviewer.id, name: reviewer.name } });
+    await rejectCompanyClaimRequest({ claimRequestId: claimB.id, reviewer: { id: reviewer.id, name: reviewer.name } });
+
+    const firstDisputeAfter = await prisma.notification.findUniqueOrThrow({ where: { id: firstDispute.id } });
+    expect(firstDisputeAfter.resolvedAt).not.toBeNull();
+    const companyAfter = await prisma.company.findUniqueOrThrow({ where: { id: company.id } });
+    expect(companyAfter.controlStatus).toBe("UNCLAIMED");
+
+    // Nova disputa legítima: dois novos solicitantes para a MESMA empresa.
+    const requesterC = await createTestUser(company.id, "notif-dispute-future-c");
+    const requesterD = await createTestUser(company.id, "notif-dispute-future-d");
+    await createOrReuseClaimRequest({ companyId: company.id, requester: { id: requesterC.id, name: requesterC.name }, origin: "SELF_REGISTRATION" });
+    await createOrReuseClaimRequest({ companyId: company.id, requester: { id: requesterD.id, name: requesterD.name }, origin: "SELF_REGISTRATION" });
+
+    const allDisputes = await prisma.notification.findMany({ where: { audience: "PLATFORM", type: "PLATFORM_COMPANY_CLAIM_DISPUTED", entityId: company.id }, orderBy: { createdAt: "asc" } });
+    expect(allDisputes).toHaveLength(2); // histórico com os dois ciclos de disputa
+    expect(allDisputes[0].resolvedAt).not.toBeNull();
+    expect(allDisputes[1].resolvedAt).toBeNull();
+    expect(allDisputes[1].dedupeKey).not.toBe(allDisputes[0].dedupeKey);
   });
 });
 

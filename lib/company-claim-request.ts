@@ -150,7 +150,7 @@ export async function createOrReuseClaimRequest(
 
     if (shouldNotifyClaimOpened) {
       const claimVersion = claim.requestedAt.getTime().toString();
-      await notifyPlatformClaimRequested({ claimRequestId: claim.id, companyId }, tx);
+      await notifyPlatformClaimRequested({ claimRequestId: claim.id, companyId, claimVersion }, tx);
 
       if (origin === "EXISTING_PRE_REGISTRATION") {
         // Sprint SST 1.4E, §11 — avisa toda consultoria com vínculo

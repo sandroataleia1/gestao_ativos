@@ -1703,6 +1703,12 @@ model Notification {
   // Retira a notificação da contagem "acionável"/badge — nunca remove do
   // histórico, nunca marca como lida para todos, nunca apaga receipts.
   resolvedAt    DateTime?
+  // Sprint SST 1.4E.1, §15 — RESERVADO, sem comportamento nesta sprint:
+  // nenhuma consulta de visibilidade/contagem (lib/notifications-listing.ts)
+  // filtra por este campo, nenhum serviço o preenche, e ele NUNCA resolve
+  // uma notificação (isso é só `resolvedAt`, ver acima). Expiração
+  // automática de notificações é um escopo próprio, deliberadamente fora
+  // desta sprint — não tratar este campo como funcional até então.
   expiresAt     DateTime?
 
   // onDelete: Restrict — mesmo padrão de CompanyMembership/CompanyClaimRequest:

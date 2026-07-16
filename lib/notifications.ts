@@ -73,31 +73,30 @@ export async function createNotification(
 
   const policy = getNotificationVisibilityPolicy(input.type);
 
-  // Verifica ANTES de tentar criar (nunca só "tenta e captura P2002" quando
-  // `tx` é uma transação interativa de um chamador): dentro de uma
-  // transação Postgres, QUALQUER erro — inclusive uma violação de
-  // constraint única — aborta a transação inteira; comandos subsequentes
-  // (mesmo um `findUniqueOrThrow` de recuperação) falham com "current
-  // transaction is aborted" porque o Postgres exige ROLLBACK antes de
-  // aceitar qualquer novo comando. Checar primeiro evita depender de captura
-  // de erro para o caso comum (retry esperado, ex.: reabertura de uma
-  // claim). Só o caso de corrida GENUÍNA (duas transações passando pelo
-  // check ao mesmo tempo) ainda pode gerar P2002 — nesse caso, dentro de uma
-  // transação de um chamador, o erro é propagado (a transação inteira falha
-  // e o chamador trata/repete, mesmo padrão de ConflictError usado no resto
-  // do projeto para corridas); só quando `tx` é o `prisma` singleton
-  // (nenhuma transação explícita em andamento) é seguro reler e devolver a
-  // linha vencedora.
-  const existing = await tx.notification.findUnique({
-    where: { audience_dedupeKey: { audience: input.audience, dedupeKey: input.dedupeKey } },
-  });
-  if (existing) {
-    return { notification: existing, dedupeHit: true };
-  }
-
-  try {
-    const notification = await tx.notification.create({
-      data: {
+  // Sprint SST 1.4E.1 — o padrão anterior (`findUnique` antes de `create`,
+  // com `create`-então-`catch(P2002)` só para o cliente de topo) reduzia a
+  // janela de corrida mas não a eliminava: duas transações diferentes podem
+  // observar ausência da mesma `dedupeKey` no `findUnique` e tentar `create`
+  // ao mesmo tempo — a perdedora recebia P2002 e, se `tx` fosse uma
+  // transação interativa de um chamador, isso abortava a transação inteira
+  // (Postgres exige ROLLBACK antes de aceitar qualquer novo comando).
+  //
+  // `createMany({ skipDuplicates: true })` compila, no Postgres, para
+  // `INSERT ... ON CONFLICT DO NOTHING` — uma colisão de unique constraint
+  // deixa de ser um ERRO de banco (nunca gera P2002, nunca aborta a
+  // transação); ela só faz o INSERT não afetar nenhuma linha. `count` do
+  // resultado já diz, sozinho, se ESTA chamada inseriu (`count: 1` →
+  // `dedupeHit: false`) ou perdeu a corrida/repetiu um retry (`count: 0` →
+  // `dedupeHit: true`) — nunca precisa comparar conteúdo para decidir.
+  //
+  // A releitura seguinte é SEMPRE por `findUniqueOrThrow` (nunca monta o
+  // retorno a partir do `input` local): um dedupe-hit devolve o conteúdo
+  // REAL já persistido (título/mensagem/metadata/actionKey/resolvedAt da
+  // primeira chamada), nunca os valores desta segunda chamada — um
+  // dedupe-hit é um retry do mesmo evento, nunca uma edição editorial (§8).
+  const { count } = await tx.notification.createMany({
+    data: [
+      {
         audience: input.audience,
         companyId: input.companyId ?? null,
         sstProviderId: input.sstProviderId ?? null,
@@ -111,17 +110,15 @@ export async function createNotification(
         dedupeKey: input.dedupeKey,
         metadata: input.metadata as Prisma.InputJsonValue | undefined,
       },
-    });
-    return { notification, dedupeHit: false };
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002" && tx === prisma) {
-      const raced = await tx.notification.findUniqueOrThrow({
-        where: { audience_dedupeKey: { audience: input.audience, dedupeKey: input.dedupeKey } },
-      });
-      return { notification: raced, dedupeHit: true };
-    }
-    throw error;
-  }
+    ],
+    skipDuplicates: true,
+  });
+
+  const notification = await tx.notification.findUniqueOrThrow({
+    where: { audience_dedupeKey: { audience: input.audience, dedupeKey: input.dedupeKey } },
+  });
+
+  return { notification, dedupeHit: count === 0 };
 }
 
 /** Resolve (globalmente) a notificação de uma dedupeKey específica — nunca
@@ -387,7 +384,7 @@ export async function notifyProviderAuthorizationBlocked(
 }
 
 export async function notifyPlatformClaimRequested(
-  params: { claimRequestId: string; companyId: string },
+  params: { claimRequestId: string; companyId: string; claimVersion: string },
   tx: Tx = prisma,
 ) {
   return createNotification(
@@ -398,7 +395,16 @@ export async function notifyPlatformClaimRequested(
       message: "Uma solicitação de controle empresarial aguarda análise.",
       entityType: "CompanyClaimRequest",
       entityId: params.claimRequestId,
-      dedupeKey: `platform:claim-requested:${params.claimRequestId}`,
+      // Sprint SST 1.4E.1 — `claimVersion` (= `claim.requestedAt.getTime()`,
+      // já persistido na mesma transação em que a claim entra em PENDING,
+      // seja no nascimento ou numa reabertura) evita que uma reabertura
+      // legítima (REJECTED/CANCELLED/EXPIRED -> PENDING, mesma linha/mesmo
+      // `claimRequestId`) encontre a Notification ANTERIOR já resolvida e a
+      // devolva como está (dedupe-hit) sem nunca voltar a ficar pendente.
+      // Cada ciclo passa a ter uma dedupeKey própria — mesmo componente já
+      // usado por `notifyProviderCompanyClaimStarted` no mesmo bloco de
+      // `createOrReuseClaimRequest`.
+      dedupeKey: `platform:claim-requested:${params.claimRequestId}:${params.claimVersion}`,
       metadata: { companyId: params.companyId },
     },
     tx,
