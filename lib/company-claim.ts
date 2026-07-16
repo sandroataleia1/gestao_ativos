@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ConflictError, NotFoundError } from "@/lib/api-errors";
 import { ForbiddenError } from "@/lib/auth-server";
 import { logAudit } from "@/lib/audit";
+import { resolveNotificationsForEntity, notifyProviderAuthorizationConfirmed, notifyProviderAuthorizationBlocked } from "@/lib/notifications";
 
 // Sprint Comercial SST 1.4 (reivindicação) — quando um representante real
 // da empresa se cadastra sobre um CNPJ já pré-cadastrado por uma
@@ -160,9 +161,10 @@ export async function resolveClaimDecision(
       status: "ACTIVE",
       companyReviewedAt: null,
     },
-    include: { provider: { select: { name: true } } },
+    include: { provider: { select: { name: true } }, company: { select: { name: true, tradeName: true } } },
   });
   if (!link) throw new NotFoundError("Vínculo provisório não encontrado ou já revisado.");
+  const companyName = link.company.tradeName || link.company.name;
 
   const guardedWhere = { id: link.id, companyReviewedAt: null } as const;
 
@@ -208,6 +210,20 @@ export async function resolveClaimDecision(
         targetLabel: link.provider.name,
         metadata: { providerId: link.providerId, accessLevel: updated.accessLevel },
       });
+      // Sprint SST 1.4E, §11 — `reviewVersion` usa `companyReviewedAt` (já
+      // persistido nesta transação) como identificador estável da decisão.
+      // Resolve por ENTIDADE (nunca por dedupeKey exata aqui — a
+      // SST_COMPANY_CLAIM_STARTED original foi criada com uma dedupeKey
+      // baseada no momento da CRIAÇÃO da claim, não da decisão; resolver
+      // por `entityId` encontra a linha certa sem precisar reconstruir
+      // aquela chave).
+      const reviewVersion = updated.companyReviewedAt!.getTime().toString();
+      await resolveNotificationsForEntity("SstProviderCompany", link.id, tx);
+      await notifyProviderAuthorizationConfirmed(
+        { sstProviderId: link.providerId, relationshipId: link.id, companyId, companyName, reviewVersion },
+        tx,
+      );
+
       const claimFinalized = await finalizeClaimIfResolved(tx, companyId);
       return { link: updated, claimFinalized };
     }
@@ -235,6 +251,14 @@ export async function resolveClaimDecision(
       targetLabel: link.provider.name,
       metadata: { providerId: link.providerId },
     });
+
+    const reviewVersion = updated.companyReviewedAt!.getTime().toString();
+    await resolveNotificationsForEntity("SstProviderCompany", link.id, tx);
+    await notifyProviderAuthorizationBlocked(
+      { sstProviderId: link.providerId, relationshipId: link.id, companyId, companyName, reviewVersion },
+      tx,
+    );
+
     const claimFinalized = await finalizeClaimIfResolved(tx, companyId);
     return { link: updated, claimFinalized };
   });

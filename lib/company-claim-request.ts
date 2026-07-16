@@ -3,6 +3,13 @@ import { prisma } from "@/lib/prisma";
 import { ConflictError, NotFoundError, ValidationError } from "@/lib/api-errors";
 import { logAudit } from "@/lib/audit";
 import { SYSTEM_ROLES } from "@/lib/permissions";
+import {
+  notifyPlatformClaimRequested,
+  notifyPlatformClaimDisputed,
+  notifyProviderCompanyClaimStarted,
+  resolveNotificationByDedupeKey,
+  resolveNotificationsForEntity,
+} from "@/lib/notifications";
 
 // Sprint SST 1.4C — serviço de domínio da entidade CompanyClaimRequest.
 // Contenção da vulnerabilidade em que só conhecer um CNPJ válido já
@@ -70,14 +77,21 @@ export async function createOrReuseClaimRequest(
       where: { companyId_requesterUserId: { companyId, requesterUserId: requester.id } },
     });
 
-    let claim: { id: string; companyId: string; requesterUserId: string; status: string };
+    let claim: { id: string; companyId: string; requesterUserId: string; status: string; requestedAt: Date };
     let reused: boolean;
+    // Sprint SST 1.4E, §11 — só notifica quando a claim de fato NASCE ou
+    // REABRE (branches 1 e 4 abaixo) — nunca numa tentativa repetida sobre
+    // uma claim já ativa (idempotente, `requestedAt` não muda, a mesma
+    // dedupeKey já existente cobriria o retry de qualquer forma) nem no
+    // caso (inalcançável em uso normal) de `existing.status === "APPROVED"`.
+    let shouldNotifyClaimOpened = false;
 
     if (!existing) {
       claim = await tx.companyClaimRequest.create({
         data: { companyId, requesterUserId: requester.id, origin, status: "PENDING" },
       });
       reused = false;
+      shouldNotifyClaimOpened = true;
       await logAudit(tx, {
         companyId,
         actorUserId: requester.id,
@@ -122,6 +136,7 @@ export async function createOrReuseClaimRequest(
         },
       });
       reused = true;
+      shouldNotifyClaimOpened = true;
       await logAudit(tx, {
         companyId,
         actorUserId: requester.id,
@@ -131,6 +146,36 @@ export async function createOrReuseClaimRequest(
         targetId: claim.id,
         metadata: { previousStatus: existing.status, reopened: true },
       });
+    }
+
+    if (shouldNotifyClaimOpened) {
+      const claimVersion = claim.requestedAt.getTime().toString();
+      await notifyPlatformClaimRequested({ claimRequestId: claim.id, companyId }, tx);
+
+      if (origin === "EXISTING_PRE_REGISTRATION") {
+        // Sprint SST 1.4E, §11 — avisa toda consultoria com vínculo
+        // provisório (PROVIDER_PRE_REGISTRATION + ACTIVE) sobre esta
+        // empresa, sem NUNCA revelar identidade do solicitante (nome/
+        // e-mail não entram nem no parâmetro desta função).
+        const provisionalLinks = await tx.sstProviderCompany.findMany({
+          where: { companyId, authorizationBasis: "PROVIDER_PRE_REGISTRATION", status: "ACTIVE" },
+          select: { id: true, providerId: true },
+        });
+        const company2 = await tx.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true, tradeName: true } });
+        const companyName = company2.tradeName || company2.name;
+        for (const provisionalLink of provisionalLinks) {
+          await notifyProviderCompanyClaimStarted(
+            {
+              sstProviderId: provisionalLink.providerId,
+              relationshipId: provisionalLink.id,
+              companyId,
+              companyName,
+              claimVersion,
+            },
+            tx,
+          );
+        }
+      }
     }
 
     // §7 — outro solicitante ATIVO e diferente para a mesma empresa vira
@@ -145,7 +190,7 @@ export async function createOrReuseClaimRequest(
 
     if (otherActiveRequesters > 0) {
       if (company.controlStatus !== "DISPUTED") {
-        await tx.company.update({ where: { id: companyId }, data: { controlStatus: "DISPUTED" } });
+        const disputedCompany = await tx.company.update({ where: { id: companyId }, data: { controlStatus: "DISPUTED" } });
         await logAudit(tx, {
           companyId,
           actorUserId: requester.id,
@@ -155,6 +200,10 @@ export async function createOrReuseClaimRequest(
           targetId: companyId,
           metadata: { activeRequesters: otherActiveRequesters + 1 },
         });
+        await notifyPlatformClaimDisputed(
+          { companyId, disputeVersion: disputedCompany.updatedAt.getTime().toString() },
+          tx,
+        );
       } else {
         await logAudit(tx, {
           companyId,
@@ -185,6 +234,11 @@ async function maybeRevertToUnclaimed(tx: Prisma.TransactionClient, companyId: s
   // ativa; nunca mexe numa Company já CLAIMED.
   if (company.controlStatus === "CLAIM_PENDING" || company.controlStatus === "DISPUTED") {
     await tx.company.update({ where: { id: companyId }, data: { controlStatus: "UNCLAIMED" } });
+    if (company.controlStatus === "DISPUTED") {
+      // Sprint SST 1.4E, §11 — a disputa terminou (nenhuma solicitação
+      // ativa restante) sem nenhuma ter sido aprovada.
+      await resolveNotificationsForEntity("Company", companyId, tx);
+    }
   }
 }
 
@@ -334,6 +388,15 @@ export async function approveCompanyClaimRequest(params: {
       metadata: { requesterUserId: preCheck.requesterUserId, finalControlStatus },
     });
 
+    // Sprint SST 1.4E, §11 — resolve a notificação de plataforma desta
+    // claim e das concorrentes superadas, e a de disputa (a aprovação
+    // sempre encerra qualquer disputa em aberto para esta empresa).
+    await resolveNotificationsForEntity("CompanyClaimRequest", claimRequestId, tx);
+    for (const other of others) {
+      await resolveNotificationsForEntity("CompanyClaimRequest", other.id, tx);
+    }
+    await resolveNotificationsForEntity("Company", preCheck.companyId, tx);
+
     return {
       claimId: claimRequestId,
       companyId: preCheck.companyId,
@@ -389,6 +452,9 @@ export async function rejectCompanyClaimRequest(params: {
       targetId: claimRequestId,
       metadata: { requesterUserId: existing.requesterUserId },
     });
+
+    // Sprint SST 1.4E, §11 — a claim rejeitada nunca mais exige análise.
+    await resolveNotificationsForEntity("CompanyClaimRequest", claimRequestId, tx);
 
     await maybeRevertToUnclaimed(tx, existing.companyId);
     return { claimId: claimRequestId, companyId: existing.companyId };
@@ -460,6 +526,10 @@ export async function cancelCompanyClaimRequest(params: {
       targetId: claimRequestId,
       metadata: {},
     });
+
+    // Sprint SST 1.4E, §11 — claim cancelada pelo próprio solicitante
+    // também deixa de exigir análise do Super Admin.
+    await resolveNotificationsForEntity("CompanyClaimRequest", claimRequestId, tx);
 
     await maybeRevertToUnclaimed(tx, existing.companyId);
     return { claimId: claimRequestId, companyId: existing.companyId };

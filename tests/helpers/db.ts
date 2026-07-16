@@ -191,6 +191,11 @@ export async function cleanupFixtures(params: {
   const providerIds = params.providerIds ?? [];
 
   if (providerIds.length > 0) {
+    // Notification.sstProviderId usa onDelete: Restrict (Sprint SST 1.4E) —
+    // precisa sair antes do SstProvider, senão o DELETE falha com violação
+    // de FK. NotificationReceipt cascateia (onDelete: Cascade), não precisa
+    // de limpeza própria.
+    await prisma.notification.deleteMany({ where: { sstProviderId: { in: providerIds } } });
     // Company.createdByProviderId usa onDelete: Restrict (Sprint Comercial
     // SST 1.4 — pré-cadastro de empresa pela consultoria, ver
     // lib/sst-company-provisioning.ts:preRegisterCompany) — precisa ser
@@ -207,6 +212,9 @@ export async function cleanupFixtures(params: {
   }
 
   if (companyIds.length > 0) {
+    // Notification.companyId usa onDelete: Restrict (Sprint SST 1.4E) —
+    // mesma razão do bloco de providerIds acima.
+    await prisma.notification.deleteMany({ where: { companyId: { in: companyIds } } });
     // CompanyClaimRequest.companyId/requesterUserId usam onDelete: Restrict
     // (Sprint SST 1.4C) — precisa sair antes de qualquer tentativa de
     // excluir a Company OU os Users referenciados como requester, senão o

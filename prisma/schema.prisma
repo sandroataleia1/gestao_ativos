@@ -188,6 +188,7 @@ model Company {
   auditLogs                AuditLog[]
   memberships               CompanyMembership[]
   claimRequests             CompanyClaimRequest[]
+  notifications             Notification[]
 
   @@index([createdByProviderId])
   // Última linha de defesa contra duas empresas com o mesmo CNPJ (Sprint
@@ -436,6 +437,7 @@ model User {
   companyClaimRequestsReviewed CompanyClaimRequest[] @relation("CompanyClaimReviewer")
   platformUser                 PlatformUser?         @relation("PlatformUserAccount")
   platformAuditLogsAsActor     PlatformAuditLog[]    @relation("PlatformAuditLogActor")
+  notificationReceipts         NotificationReceipt[]
 
   @@index([companyId])
 }
@@ -1512,6 +1514,7 @@ model SstProvider {
   companyTrainings CompanyTraining[]
   providerUsers    SstProviderUser[]
   auditLogs        AuditLog[]
+  notifications    Notification[]
 }
 
 enum SstProviderCompanyStatus {
@@ -1613,4 +1616,129 @@ model SstProviderUser {
   @@unique([providerId, userId])
   @@index([providerId])
   @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Sprint SST 1.4E — Centro de notificações compartilhado entre os três
+// portais (Empresa/Consultoria/Plataforma). Domínio deliberadamente
+// SEPARADO de AuditLog/PlatformAuditLog (histórico técnico/administrativo,
+// nunca substituído) e da página de alertas operacionais (situação atual do
+// domínio — estoque/CA/custódia/treinamento, fora de escopo aqui).
+// Notification é institucional (uma linha por evento, nunca uma cópia por
+// destinatário) — a visibilidade é resolvida a cada consulta a partir do
+// papel/permissão ATUAIS do usuário (lib/notifications-visibility.ts),
+// nunca de um snapshot congelado no momento da criação. NotificationReceipt
+// é individual por usuário, criado sob demanda só quando o usuário lê ou
+// dispensa — nunca escrito em massa no momento do evento.
+//
+// Nunca concede CompanyMembership, SstProviderCompany ACTIVE ou
+// PlatformUser — é só uma forma de informar/direcionar, nunca uma fonte de
+// autorização (a rota de destino sempre revalida via os guards já
+// existentes: requireCompanyOrDeny/requireSstAuthOrDeny/requirePlatformRoleOrDeny).
+// ---------------------------------------------------------------------------
+
+enum NotificationAudience {
+  COMPANY
+  SST_PROVIDER
+  PLATFORM
+}
+
+enum NotificationSeverity {
+  INFO
+  SUCCESS
+  WARNING
+  CRITICAL
+}
+
+enum NotificationType {
+  COMPANY_SST_ACCESS_REQUESTED
+  COMPANY_SST_ACCESS_REQUEST_RESOLVED
+
+  SST_ACCESS_APPROVED
+  SST_ACCESS_REJECTED
+  SST_ACCESS_SUSPENDED
+  SST_ACCESS_REVOKED
+  SST_ACCESS_LEVEL_CHANGED
+  SST_COMPANY_CLAIM_STARTED
+  SST_AUTHORIZATION_CONFIRMED
+  SST_AUTHORIZATION_BLOCKED
+
+  PLATFORM_COMPANY_CLAIM_REQUESTED
+  PLATFORM_COMPANY_CLAIM_DISPUTED
+}
+
+// Notificação institucional — uma linha por evento, nunca uma cópia física
+// por destinatário. `companyId`/`sstProviderId` são mutuamente exclusivos e
+// condicionados por `audience` (COMPANY exige companyId; SST_PROVIDER exige
+// sstProviderId; PLATFORM exige nenhum dos dois) — o Prisma não expressa
+// essa regra condicional, então uma CHECK constraint SQL adicional é
+// aplicada manualmente na migration (ver migration.sql desta sprint) além
+// destes campos ficarem nullable aqui.
+model Notification {
+  id            String               @id @default(cuid())
+  audience      NotificationAudience
+  companyId     String?
+  sstProviderId String?
+  type          NotificationType
+  severity      NotificationSeverity
+  title         String
+  message       String
+  // Chave de navegação segura (ver lib/notification-action.ts) — nunca uma
+  // URL absoluta enviada/armazenada livremente; sempre resolvida no
+  // servidor a partir do tipo + entidade + contexto autorizado no momento
+  // do clique.
+  actionKey     String?
+  entityType    String?
+  entityId      String?
+  // Chave estável de deduplicação da TRANSIÇÃO de domínio que originou o
+  // evento (nunca um timestamp aleatório) — ver lib/notifications.ts.
+  // Única por audiência (duas audiências podem legitimamente compartilhar
+  // a mesma dedupeKey para o mesmo evento, ex.: aprovação gera uma linha
+  // COMPANY e uma linha SST_PROVIDER a partir do mesmo relationshipId).
+  dedupeKey     String
+  // Sanitizada por assertNoSecrets (lib/platform-audit.ts, reaproveitado) —
+  // nunca senha/token/cookie/CNPJ integral/dado operacional.
+  metadata      Json?
+  createdAt     DateTime             @default(now())
+  // Retira a notificação da contagem "acionável"/badge — nunca remove do
+  // histórico, nunca marca como lida para todos, nunca apaga receipts.
+  resolvedAt    DateTime?
+  expiresAt     DateTime?
+
+  // onDelete: Restrict — mesmo padrão de CompanyMembership/CompanyClaimRequest:
+  // nunca apagar fisicamente uma Company/SstProvider que ainda tem
+  // notificação vinculada (nenhum dos dois é hard-deletável hoje de
+  // qualquer forma).
+  company     Company?              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  sstProvider SstProvider?          @relation(fields: [sstProviderId], references: [id], onDelete: Restrict)
+  receipts    NotificationReceipt[]
+
+  @@unique([audience, dedupeKey])
+  @@index([companyId, createdAt])
+  @@index([sstProviderId, createdAt])
+  @@index([audience, createdAt])
+  @@index([resolvedAt, createdAt])
+}
+
+// Estado de leitura/dispensa INDIVIDUAL por usuário — nunca resolve a
+// notificação globalmente (isso é `Notification.resolvedAt`, ação
+// administrativa separada). onDelete: Cascade nos dois lados (mesmo padrão
+// conceitual do spec): apagar o usuário ou a notificação em si (nunca feito
+// pelas interfaces comuns, só por ferramenta administrativa direta) leva os
+// receipts junto — não há valor histórico em manter um receipt órfão.
+model NotificationReceipt {
+  id             String    @id @default(cuid())
+  notificationId String
+  userId         String
+  readAt         DateTime?
+  dismissedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@index([userId, readAt])
+  @@index([userId, dismissedAt])
 }

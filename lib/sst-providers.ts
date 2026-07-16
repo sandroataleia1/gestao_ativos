@@ -4,6 +4,15 @@ import { ConflictError, NotFoundError, ValidationError } from "@/lib/api-errors"
 import { logAudit } from "@/lib/audit";
 import { resolveTrainingAuthorization } from "@/lib/training-authorization";
 import type { SstProviderLinkCreateInput, SstProviderLinkStatusUpdateInput } from "@/lib/validations/sst-provider";
+import {
+  resolveNotificationByDedupeKey,
+  notifyCompanyAccessRequestResolved,
+  notifyProviderAccessApproved,
+  notifyProviderAccessRejected,
+  notifyProviderAccessSuspended,
+  notifyProviderAccessRevoked,
+  notifyProviderAccessLevelChanged,
+} from "@/lib/notifications";
 
 export const providerLinkInclude = {
   provider: { select: { id: true, name: true, document: true, email: true, phone: true, active: true } },
@@ -140,9 +149,17 @@ const LINK_STATUS_ACTION = {
 // PENDING só aceita ACTIVE (aprovar) ou REJECTED (recusar); ACTIVE/SUSPENDED
 // podem transitar entre si e para REVOKED; REVOKED/REJECTED são terminais
 // (guarda já existente acima, mantida).
+// Sprint SST 1.4E, §11 — `ACTIVE: [..., "ACTIVE"]` adicionado (extensão
+// mínima, mesmo espírito de SUSPENDED -> ACTIVE já existente) para permitir
+// uma troca de `accessLevel` SEM sair de ACTIVE — a única forma real de
+// disparar `SST_ACCESS_LEVEL_CHANGED` (spec §11/§20), já que antes desta
+// sprint o nível só mudava como efeito colateral da aprovação inicial
+// (PENDING -> ACTIVE). Nunca reexecuta os campos de aprovação
+// (`approvedAt`/`companyReviewedAt`) nesse caminho — só quando a transição
+// de origem é genuinamente PENDING -> ACTIVE (ver corpo da função abaixo).
 const ALLOWED_STATUS_TRANSITIONS: Record<string, readonly SstProviderLinkStatusUpdateInput["status"][]> = {
   PENDING: ["ACTIVE", "REJECTED"],
-  ACTIVE: ["SUSPENDED", "REVOKED"],
+  ACTIVE: ["SUSPENDED", "REVOKED", "ACTIVE"],
   SUSPENDED: ["ACTIVE", "REVOKED"],
 };
 
@@ -169,7 +186,7 @@ export async function updateProviderLinkStatus(
 ) {
   const existing = await prisma.sstProviderCompany.findFirst({
     where: { id: linkId, companyId },
-    include: providerLinkInclude,
+    include: { ...providerLinkInclude, company: { select: { name: true, tradeName: true } } },
   });
   if (!existing) throw new NotFoundError("Vínculo com prestador SST não encontrado.");
 
@@ -179,12 +196,25 @@ export async function updateProviderLinkStatus(
     );
   }
 
+  // Sprint SST 1.4E, §11 — uma chamada ACTIVE -> ACTIVE só faz sentido (e só
+  // é permitida) quando de fato muda o accessLevel; nunca um "re-aprovar"
+  // silencioso do mesmo nível.
+  if (existing.status === "ACTIVE" && input.status === "ACTIVE" && (!input.accessLevel || input.accessLevel === existing.accessLevel)) {
+    throw new ValidationError("Informe um nível de acesso diferente do atual para registrar uma alteração.");
+  }
+
   const allowedNextStatuses = ALLOWED_STATUS_TRANSITIONS[existing.status] ?? [];
   if (!allowedNextStatuses.includes(input.status)) {
     throw new ValidationError(
       `Não é possível alterar um vínculo de "${existing.status}" para "${input.status}".`,
     );
   }
+
+  const companyName = existing.company.tradeName || existing.company.name;
+  // Transição real desta chamada (distinta do `status` alvo): PENDING ->
+  // ACTIVE é uma aprovação; ACTIVE -> ACTIVE é só uma troca de nível.
+  const isApprovalFromPending = existing.status === "PENDING" && input.status === "ACTIVE";
+  const isLevelChangeOnly = existing.status === "ACTIVE" && input.status === "ACTIVE";
 
   return prisma.$transaction(async (tx) => {
     // Sprint SST 1.4B, §7/§9 — o `existing.status` acima foi lido FORA desta
@@ -200,7 +230,7 @@ export async function updateProviderLinkStatus(
       where: { id: linkId, status: existing.status },
       data: {
         status: input.status,
-        ...(input.status === "ACTIVE"
+        ...(isApprovalFromPending
           ? {
               approvedByUserId: actor.id,
               approvedAt: new Date(),
@@ -210,6 +240,7 @@ export async function updateProviderLinkStatus(
               ...(input.accessLevel ? { accessLevel: input.accessLevel } : {}),
             }
           : {}),
+        ...(isLevelChangeOnly ? { accessLevel: input.accessLevel } : {}),
         ...(input.status === "REVOKED" ? { revokedAt: new Date() } : {}),
         ...(input.status === "REJECTED"
           ? { companyReviewedAt: new Date(), companyReviewedByUserId: actor.id }
@@ -241,6 +272,38 @@ export async function updateProviderLinkStatus(
         ...(input.status === "ACTIVE" ? { accessLevel: link.accessLevel } : {}),
       },
     });
+
+    // Sprint SST 1.4E, §11 — notificações transacionais. `stateVersion` usa
+    // `link.updatedAt` (já persistido nesta mesma transação) como
+    // identificador estável da transição — nunca um timestamp gerado à
+    // parte, nunca aleatório (§10).
+    const stateVersion = link.updatedAt.getTime().toString();
+    const notifyParams = { sstProviderId: existing.providerId, relationshipId: link.id, companyId, companyName, stateVersion };
+
+    if (isApprovalFromPending) {
+      await resolveNotificationByDedupeKey("COMPANY", `company:sst-access-request:${link.id}`, tx);
+      await notifyCompanyAccessRequestResolved(
+        { companyId, relationshipId: link.id, finalStatus: "ACTIVE", providerName: existing.provider.name },
+        tx,
+      );
+      await notifyProviderAccessApproved({ ...notifyParams, accessLevel: link.accessLevel }, tx);
+    } else if (isLevelChangeOnly) {
+      await notifyProviderAccessLevelChanged(
+        { ...notifyParams, previousAccessLevel: existing.accessLevel, newAccessLevel: link.accessLevel },
+        tx,
+      );
+    } else if (input.status === "REJECTED") {
+      await resolveNotificationByDedupeKey("COMPANY", `company:sst-access-request:${link.id}`, tx);
+      await notifyCompanyAccessRequestResolved(
+        { companyId, relationshipId: link.id, finalStatus: "REJECTED", providerName: existing.provider.name },
+        tx,
+      );
+      await notifyProviderAccessRejected(notifyParams, tx);
+    } else if (input.status === "SUSPENDED") {
+      await notifyProviderAccessSuspended(notifyParams, tx);
+    } else if (input.status === "REVOKED") {
+      await notifyProviderAccessRevoked(notifyParams, tx);
+    }
 
     return link;
   });

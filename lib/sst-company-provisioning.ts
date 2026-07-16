@@ -4,6 +4,7 @@ import { ConflictError, NotFoundError, ValidationError } from "@/lib/api-errors"
 import { logAudit } from "@/lib/audit";
 import { isValidCnpj, maskCnpjForLog, normalizeCnpj } from "@/lib/cnpj";
 import { createCompanyWithCanonicalDocument } from "@/lib/company-creation";
+import { notifyCompanyAccessRequested } from "@/lib/notifications";
 
 // Sprint Comercial SST 1.4 — pré-cadastro de empresa e solicitação de
 // autorização pelo Portal Consultoria, a partir do CNPJ. Regra central
@@ -166,6 +167,25 @@ async function continueWithExistingCompany(
         targetType: "SstProviderCompany",
         targetId: link.id,
       });
+
+      // Sprint SST 1.4E, §11 — só notifica a empresa se já existir alguém
+      // capaz de agir (CompanyMembership ACTIVE). Uma Company ainda
+      // UNCLAIMED/CLAIM_PENDING (sem administrador validado) não tem
+      // nenhum usuário empresarial que possa ver/decidir esta solicitação
+      // — criar a notificação aqui seria uma notificação institucional sem
+      // ninguém para recebê-la. Decisão documentada: não criar nenhuma
+      // notificação (nem empresarial nem de plataforma) neste caso — este
+      // NÃO é um evento de reivindicação (CompanyClaimRequest), é só um
+      // pedido de acesso SST que ficará PENDING até a empresa ter um
+      // administrador (quando a claim dela for aprovada, a solicitação
+      // continua visível normalmente na tela de prestadores, só não gera
+      // uma notificação "perdida" nesta janela).
+      const hasActiveAdmin = await tx.companyMembership.count({ where: { companyId: company.id, status: "ACTIVE" } });
+      if (hasActiveAdmin > 0) {
+        const provider = await tx.sstProvider.findUniqueOrThrow({ where: { id: providerId }, select: { name: true } });
+        await notifyCompanyAccessRequested({ companyId: company.id, relationshipId: link.id, providerName: provider.name }, tx);
+      }
+
       return { status: "AUTHORIZATION_REQUESTED", link };
     });
   } catch (error) {

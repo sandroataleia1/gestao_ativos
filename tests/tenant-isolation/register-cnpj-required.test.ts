@@ -34,6 +34,11 @@ afterAll(async () => {
     await prisma.user.deleteMany({ where: { id: { in: userIds } } });
   }
   if (createdCompanyIds.length > 0) {
+    // Notification.companyId/sstProviderId usam onDelete: Restrict (Sprint
+    // SST 1.4E) — precisa sair antes de Company/SstProvider, senão o
+    // DELETE falha com violação de FK (ex.: SST_COMPANY_CLAIM_STARTED
+    // criada pelo teste de reivindicação sobre pré-cadastro abaixo).
+    await prisma.notification.deleteMany({ where: { companyId: { in: createdCompanyIds } } });
     await prisma.sstProviderCompany.deleteMany({ where: { companyId: { in: createdCompanyIds } } });
     await prisma.auditLog.deleteMany({ where: { companyId: { in: createdCompanyIds } } });
     await prisma.role.deleteMany({ where: { companyId: { in: createdCompanyIds } } });
@@ -45,6 +50,7 @@ afterAll(async () => {
     await prisma.company.deleteMany({ where: { id: { in: createdCompanyIds } } });
   }
   if (createdProviderIds.length > 0) {
+    await prisma.notification.deleteMany({ where: { sstProviderId: { in: createdProviderIds } } });
     await prisma.sstProvider.deleteMany({ where: { id: { in: createdProviderIds } } });
   }
   await prisma.$disconnect();

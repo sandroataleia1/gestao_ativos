@@ -4,6 +4,7 @@ import { ShieldCheckIcon } from "lucide-react";
 import { requireSstAuthOrDeny } from "@/lib/sst-auth";
 import { Badge } from "@/components/ui/badge";
 import { UserMenu } from "@/components/layout/user-menu";
+import { NotificationBell } from "@/components/notifications/notification-bell";
 import { SstNav } from "./sst-nav";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -54,6 +55,11 @@ export default async function SstLayout({ children }: { children: React.ReactNod
           >
             {ROLE_LABELS[sstProviderUser.role] ?? sstProviderUser.role}
           </Badge>
+          <NotificationBell
+            apiBase="/api/sst/notifications"
+            historyHref="/sst/notifications"
+            triggerClassName="text-blue-50 hover:bg-white/10 hover:text-white dark:text-foreground dark:hover:bg-muted"
+          />
           <UserMenu
             name={user.name}
             email={user.email}

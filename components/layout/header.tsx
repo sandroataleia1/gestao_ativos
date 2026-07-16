@@ -3,6 +3,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { UserMenu } from "@/components/layout/user-menu";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { CompanySwitcher, type SwitchableCompany } from "@/components/layout/company-switcher";
+import { NotificationBell } from "@/components/notifications/notification-bell";
 
 export function Header({
   userName,
@@ -55,6 +56,7 @@ export function Header({
         )}
       </div>
       <div className="flex items-center gap-2">
+        <NotificationBell apiBase="/api/notifications" historyHref="/notifications" />
         <ThemeToggle />
         <UserMenu name={userName} email={userEmail} showEmailInline={false} />
       </div>

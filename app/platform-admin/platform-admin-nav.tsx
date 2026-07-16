@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 const NAV_ITEMS = [
   { href: "/platform-admin", label: "Visão geral" },
   { href: "/platform-admin/company-claims", label: "Reivindicações" },
+  { href: "/platform-admin/notifications", label: "Notificações" },
   { href: "/platform-admin/audit", label: "Auditoria" },
 ] as const;
 

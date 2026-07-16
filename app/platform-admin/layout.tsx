@@ -3,6 +3,7 @@ import { ShieldIcon } from "lucide-react";
 
 import { requirePlatformRoleOrDeny } from "@/lib/platform-auth";
 import { UserMenu } from "@/components/layout/user-menu";
+import { NotificationBell } from "@/components/notifications/notification-bell";
 import { PlatformAdminNav } from "./platform-admin-nav";
 
 // Sprint SST 1.4D, §6 — layout do Portal Super Admin Lite, TOTALMENTE
@@ -35,13 +36,20 @@ export default async function PlatformAdminLayout({ children }: { children: Reac
           </Link>
           <PlatformAdminNav />
         </div>
-        <UserMenu
-          name={user.name}
-          email={user.email}
-          signOutRedirectTo="/login"
-          triggerClassName="text-zinc-200 hover:bg-white/10 hover:text-white"
-          emailClassName="text-zinc-500"
-        />
+        <div className="flex items-center gap-2">
+          <NotificationBell
+            apiBase="/api/platform-admin/notifications"
+            historyHref="/platform-admin/notifications"
+            triggerClassName="text-zinc-200 hover:bg-white/10 hover:text-white"
+          />
+          <UserMenu
+            name={user.name}
+            email={user.email}
+            signOutRedirectTo="/login"
+            triggerClassName="text-zinc-200 hover:bg-white/10 hover:text-white"
+            emailClassName="text-zinc-500"
+          />
+        </div>
       </header>
       <main className="flex-1 p-6">{children}</main>
     </div>
