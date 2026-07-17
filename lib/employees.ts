@@ -4,32 +4,55 @@ import { NotFoundError, ValidationError } from "@/lib/api-errors";
 import { logAudit, type ActorInput } from "@/lib/audit";
 import type { EmployeeInput } from "@/lib/validations/employee";
 
+// Mensagem única para departmentId/positionId inválidos (Sprint SST 1.4F.1,
+// §4/§8) — nunca revela qual dos dois campos falhou, nem que o id pertence a
+// OUTRA Company (a diferença entre "não existe" e "existe em outro tenant" é
+// invisível de propósito, tanto para quem tentaria descobrir outra empresa
+// quanto para reduzir a superfície de enumeração).
+const ORG_REFERENCE_INVALID_MESSAGE = "O setor ou cargo selecionado não está disponível para esta empresa.";
+
 /**
  * Garante que `departmentId`/`positionId` (quando informados) existem e
  * pertencem à empresa atual — nunca confia apenas no formato do id vindo do
- * client.
+ * client. Sprint SST 1.4F.1, §5: recebe `tx` e roda DENTRO da mesma
+ * transação do create/update que a chama — a validação e a gravação
+ * acontecem atomicamente, nunca como duas operações separadas que uma
+ * corrida poderia desalinhar. `select` mínimo (só `id`) — nunca retorna
+ * nome/dados do registro validado, mesmo internamente.
+ *
+ * Department/Position são imutáveis após criados (nenhuma rota expõe
+ * update/delete para os dois — só POST de criação, ver
+ * app/api/departments/route.ts e app/api/positions/route.ts) — não existe
+ * hoje um cenário real de "companyId trocado" ou "registro removido entre a
+ * validação e o create", mas a validação transacional é mantida como defesa
+ * em profundidade e para provar atomicidade, não porque uma corrida
+ * conhecida exista.
  */
-export async function assertReferencesBelongToCompany(
-  companyId: string,
-  input: Pick<EmployeeInput, "departmentId" | "positionId">,
-) {
-  if (input.departmentId) {
-    const department = await prisma.department.findFirst({
-      where: { id: input.departmentId, companyId },
+export async function validateEmployeeOrganizationReferences(params: {
+  companyId: string;
+  departmentId?: string | null;
+  positionId?: string | null;
+  tx: Prisma.TransactionClient | typeof prisma;
+}) {
+  const { companyId, departmentId, positionId, tx } = params;
+
+  if (departmentId) {
+    const department = await tx.department.findFirst({
+      where: { id: departmentId, companyId },
       select: { id: true },
     });
     if (!department) {
-      throw new ValidationError("Departamento inválido.");
+      throw new ValidationError(ORG_REFERENCE_INVALID_MESSAGE);
     }
   }
 
-  if (input.positionId) {
-    const position = await prisma.position.findFirst({
-      where: { id: input.positionId, companyId },
+  if (positionId) {
+    const position = await tx.position.findFirst({
+      where: { id: positionId, companyId },
       select: { id: true },
     });
     if (!position) {
-      throw new ValidationError("Cargo inválido.");
+      throw new ValidationError(ORG_REFERENCE_INVALID_MESSAGE);
     }
   }
 }
@@ -164,10 +187,15 @@ export async function createEmployeeForCompany(
   input: EmployeeInput,
   actor: ActorInput,
 ) {
-  await assertReferencesBelongToCompany(companyId, input);
-
   try {
     return await prisma.$transaction(async (tx) => {
+      await validateEmployeeOrganizationReferences({
+        companyId,
+        departmentId: input.departmentId,
+        positionId: input.positionId,
+        tx,
+      });
+
       const employee = await tx.employee.create({
         data: { ...input, companyId },
         include: employeeListInclude,
@@ -202,11 +230,17 @@ export async function updateEmployeeForCompany(
   const existing = await prisma.employee.findFirst({ where: { id: employeeId, companyId } });
   if (!existing) throw new NotFoundError("Colaborador não encontrado.");
 
-  await assertReferencesBelongToCompany(companyId, input);
   const changedFields = diffEmployeeFields(existing, input);
 
   try {
     return await prisma.$transaction(async (tx) => {
+      await validateEmployeeOrganizationReferences({
+        companyId,
+        departmentId: input.departmentId,
+        positionId: input.positionId,
+        tx,
+      });
+
       const employee = await tx.employee.update({
         where: { id: employeeId },
         data: input,
@@ -239,7 +273,15 @@ export async function updateEmployeeForCompany(
 /** Soft delete: marca INACTIVE, nunca remove a linha — preserva histórico
  * (custódias/treinamentos podem referenciar o colaborador). Idempotente:
  * chamar sobre um já INACTIVE só reconfirma o estado, sem auditoria
- * duplicada (mesmo espírito de markNotificationRead). */
+ * duplicada (mesmo espírito de markNotificationRead).
+ *
+ * Sprint SST 1.4F.1, §10 — audita como `employee.deactivate`, não mais
+ * `employee.delete`: nenhuma linha é de fato apagada (confirmado — não há
+ * NENHUM `prisma.employee.delete`/`deleteMany` em todo o código da
+ * aplicação), então um nome de evento com "delete" era semanticamente
+ * incorreto. `employee.delete` permanece no catálogo (`lib/audit.ts`) só
+ * para não invalidar o tipo de linhas de auditoria já gravadas com esse
+ * valor (nenhuma migração de dado histórico é feita). */
 export async function deactivateEmployeeForCompany(companyId: string, employeeId: string, actor: ActorInput) {
   const existing = await prisma.employee.findFirst({ where: { id: employeeId, companyId }, include: employeeListInclude });
   if (!existing) throw new NotFoundError("Colaborador não encontrado.");
@@ -260,7 +302,7 @@ export async function deactivateEmployeeForCompany(companyId: string, employeeId
       actorName: actor.name,
       actorType: actor.actorType,
       providerId: actor.providerId,
-      action: "employee.delete",
+      action: "employee.deactivate",
       targetType: "Employee",
       targetId: employeeId,
       targetLabel: existing.name,

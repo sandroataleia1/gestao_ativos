@@ -70,7 +70,7 @@ export async function getTrainingClassesPage(companyId: string, params: Training
 /**
  * Garante que `companyTrainingId` existe, pertence à empresa atual e está
  * ativo — nunca confia apenas no formato do id vindo do client. Mesmo padrão
- * de assertReferencesBelongToCompany (lib/employees.ts).
+ * de validateEmployeeOrganizationReferences (lib/employees.ts).
  */
 export async function assertCompanyTrainingBelongsToCompany(companyId: string, companyTrainingId: string) {
   const companyTraining = await prisma.companyTraining.findFirst({

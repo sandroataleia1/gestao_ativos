@@ -36,7 +36,13 @@ export type AuditAction =
   | "asset.delete"
   | "employee.create"
   | "employee.update"
+  // Sprint SST 1.4F.1, §10 — `employee.delete` nunca representou uma
+  // exclusão real (não existe NENHUM prisma.employee.delete/deleteMany no
+  // código da aplicação); mantido no catálogo só para não invalidar
+  // linhas de auditoria já gravadas com esse valor (nenhuma migração de
+  // dado histórico é feita). Todo código NOVO usa `employee.deactivate`.
   | "employee.delete"
+  | "employee.deactivate"
   | "employee.reactivate"
   | "import.run"
   | "company.update"

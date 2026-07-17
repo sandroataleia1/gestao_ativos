@@ -126,3 +126,95 @@ Portal Empresa já leem — aparece imediatamente nos dois, sem código extra.
   `Employee` nesta sprint (nenhuma ação exclusiva de ADMINISTRATION foi
   definida no spec) — documentado, não um bug.
 - Sem edição em massa/importação — fora de escopo desta sprint.
+
+---
+
+## Sprint SST 1.4F.1 — Hardening de colaboradores, relações organizacionais e privacidade
+
+### 11. Isolamento de Department/Position entre tenants
+
+**Achado da auditoria**: o banco (Postgres/Prisma) **nunca impediu**
+`Employee.companyId = A` com `Department.companyId = B` ou
+`Position.companyId = B` — `Employee.departmentId`/`positionId` são FKs
+simples para `Department.id`/`Position.id`, sem FK composta nem CHECK
+amarrando `companyId`. A ÚNICA proteção sempre foi de aplicação:
+`lib/employees.ts` (então `assertReferencesBelongToCompany`, criada muito
+antes desta sprint para o Portal Empresa e reaproveitada pelo Portal SST na
+Sprint 1.4F) — já bloqueava corretamente antes desta sprint. O diagnóstico
+(`npm run diagnose:employee-organization`) confirmou **0 inconsistências**
+nos 2033 colaboradores existentes.
+
+**O que mudou nesta sprint**: a função foi renomeada para
+`validateEmployeeOrganizationReferences({ companyId, departmentId,
+positionId, tx })` e **movida para dentro da mesma transação** Prisma do
+`create`/`update` (antes rodava como uma consulta separada, ANTES de abrir a
+transação — nunca uma corrida real, dado que Department/Position são
+imutáveis após criados, mas agora a atomicidade é estrutural, não
+presumida). Mensagem de erro unificada: "O setor ou cargo selecionado não
+está disponível para esta empresa." — nunca revela qual dos dois campos
+falhou, nem que o id pertence a outra empresa, nem P2002/P2025/nome de
+constraint.
+
+**Department/Position são imutáveis**: confirmado por auditoria de código —
+`app/api/departments/route.ts`/`app/api/positions/route.ts` só têm `POST`
+(criação); não existe NENHUM `prisma.department.update`/`delete` (nem
+`position.*` equivalente) em toda a aplicação. `companyId` de um
+Department/Position nunca muda depois de criado, e nenhum é removido — os
+cenários de "referência removida entre validação e gravação" (§13 do spec)
+são estruturalmente **inaplicáveis** ao domínio atual, documentado em vez de
+testado com um cenário fictício.
+
+**Constraint de banco (`@@unique([id, companyId])` + FK composta)**:
+avaliada e **não aplicada nesta sprint** — a proteção de serviço já é
+suficiente (0 inconsistências, validação transacional, cobertura de teste
+extensa) e uma migration para reforço redundante não tem benefício de defesa
+em profundidade que justifique o custo/risco de uma migration nova. Ver
+critério do próprio spec (§6): só propor se a proteção de serviço for
+insuficiente — não é o caso.
+
+### 12. Política final do documento por papel
+
+O GET de detalhe do Portal SST (`/api/sst/companies/[companyId]/employees/[employeeId]`)
+**sempre** mascara o documento — inclusive para OWNER/TECHNICIAN com
+accessLevel OPERATION/ADMINISTRATION. Isso não é uma lacuna: esse endpoint
+nunca alimenta o formulário de edição (que busca o registro completo
+diretamente no servidor, na página `edit/page.tsx`, já atrás de
+`requireSstProviderEmployeeManageAccessOrDeny`). "Separar DTO por
+capacidade" (spec §8) é resolvido assim — a capacidade de editar nunca passa
+por este endpoint de API, só pela página server-rendered com seu próprio
+guard.
+
+### 13. Semântica de auditoria da inativação
+
+Auditoria confirmou: `employee.delete` **sempre** representou soft
+delete/inativação (única ocorrência em todo o código, dentro de
+`deactivateEmployeeForCompany`); **não existe hard delete real** de
+`Employee` em nenhum lugar da aplicação (confirmado por busca por
+`prisma.employee.delete`/`deleteMany`). Nenhum relatório/filtro depende do
+literal `"employee.delete"`. `AuditLog.action` é uma coluna `String` livre
+(não um enum Postgres) — renomear não exigiu migration.
+
+Corrigido: `deactivateEmployeeForCompany` agora grava `employee.deactivate`.
+`employee.delete` permanece no catálogo (`lib/audit.ts`) só por
+compatibilidade de tipo com linhas já gravadas (nenhuma linha histórica foi
+migrada). Portal Empresa e Portal SST usam a mesma função (mesmo serviço
+compartilhado), logo a mesma semântica automaticamente.
+
+### 14. Diagnóstico de dados existentes
+
+`scripts/diagnose-employee-organization.ts` (mantido como diagnóstico
+oficial, `npm run diagnose:employee-organization`, somente leitura) —
+resultado nos dados atuais: 2033 colaboradores, 2028 com
+departmentId/positionId, **0** com `companyId` divergente do
+Department/Position associado, **0** referências órfãs, **0** com
+Department/Position inativo associado.
+
+### 15. Limitações desta sprint
+
+- Nenhuma migration foi criada — a proteção de serviço já é suficiente e
+  Department/Position são imutáveis (ver §11).
+- A opção de "referência removida entre validação e gravação" (§13 do spec)
+  não foi testada como cenário de concorrência real porque o domínio não
+  permite remoção de Department/Position hoje — documentado, não simulado.
+- Validação manual em navegador segue não executada (mesma pendência
+  herdada de todas as sprints anteriores).

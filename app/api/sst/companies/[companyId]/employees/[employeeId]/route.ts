@@ -9,10 +9,15 @@ import { requireTrustedMutationOrigin } from "@/lib/mutation-origin";
 
 type RouteParams = { params: Promise<{ companyId: string; employeeId: string }> };
 
-// Detalhe (documento mascarado, mesma política da listagem, ver §24) — o
-// formulário de EDIÇÃO busca o registro completo diretamente no servidor
-// (páginas app/sst/(portal)/companies/[companyId]/employees/[employeeId]/edit),
-// não por este GET; esta rota serve consumidores externos/programáticos.
+// Detalhe — SEMPRE mascara o documento (Sprint SST 1.4F.1, §8), sem exceção
+// para VIEWER/accessLevel VIEW nem para quem tem gestão: este GET nunca é o
+// caminho que alimenta o formulário de edição (que busca o registro
+// completo diretamente no servidor, nas páginas
+// app/sst/(portal)/companies/[companyId]/employees/[employeeId]/edit, já
+// atrás de requireSstProviderEmployeeManageAccessOrDeny) — esta rota serve
+// só consumidores externos/programáticos de LEITURA, então nunca precisa
+// devolver o valor bruto. "Separar DTO por capacidade" (§8) é resolvido
+// assim: a capacidade de editar nunca passa por este endpoint.
 export async function GET(_request: Request, { params }: RouteParams) {
   try {
     const { companyId, employeeId } = await params;

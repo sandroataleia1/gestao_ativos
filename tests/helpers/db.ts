@@ -255,6 +255,13 @@ export async function cleanupFixtures(params: {
     await prisma.locationType.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.movementType.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.employee.deleteMany({ where: { companyId: { in: companyIds } } });
+    // Department/Position.companyId usam onDelete padrão (Restrict) — só
+    // passaram a ser criados diretamente por testes na Sprint SST 1.4F.1
+    // (isolamento cross-tenant); sem isso, o DELETE da Company abaixo falha
+    // com violação de FK sempre que um teste cria um Department/Position
+    // sem passar por Employee.
+    await prisma.department.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.position.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.userRole.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.user.deleteMany({ where: { companyId: { in: companyIds } } });
     // Deletar Role cascateia RolePermission (onDelete: Cascade no schema).

@@ -19,7 +19,7 @@ export const participantEmployeeInclude = {
 
 /** Garante que cada id existe, pertence à empresa atual e está ACTIVE —
  * nunca confia apenas no formato do id vindo do client. Mesmo padrão de
- * assertReferencesBelongToCompany (lib/employees.ts) e
+ * validateEmployeeOrganizationReferences (lib/employees.ts) e
  * assertCompanyTrainingBelongsToCompany (lib/training-classes.ts). */
 export async function assertEmployeesActiveInCompany(companyId: string, employeeIds: string[]) {
   const employees = await prisma.employee.findMany({

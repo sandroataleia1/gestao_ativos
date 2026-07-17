@@ -486,7 +486,7 @@ describe("Inativação e reativação", () => {
     const inactivePage = await getSstCompanyEmployeesPage(company.id, { page: 1, pageSize: 20, status: "INACTIVE" });
     expect(inactivePage.rows.some((r) => r.id === employee.id)).toBe(true);
 
-    const audit = await prisma.auditLog.findFirst({ where: { action: "employee.delete", targetId: employee.id } });
+    const audit = await prisma.auditLog.findFirst({ where: { action: "employee.deactivate", targetId: employee.id } });
     expect(audit).not.toBeNull();
   });
 
@@ -532,7 +532,7 @@ describe("Inativação e reativação", () => {
     expect((await getEmployeeForCompany(company.id, employee.id)).status).toBe("ACTIVE");
 
     const actions = await prisma.auditLog.findMany({ where: { targetId: employee.id }, select: { action: true } });
-    expect(actions.map((a) => a.action).sort()).toEqual(["employee.delete", "employee.reactivate"]);
+    expect(actions.map((a) => a.action).sort()).toEqual(["employee.deactivate", "employee.reactivate"]);
   });
 });
 
@@ -737,7 +737,7 @@ describe("Regressão", () => {
     expect(deactivated.status).toBe("INACTIVE");
 
     const auditActions = await prisma.auditLog.findMany({ where: { targetId: created.id }, select: { action: true, actorType: true } });
-    expect(auditActions.map((a) => a.action).sort()).toEqual(["employee.create", "employee.delete", "employee.update"]);
+    expect(auditActions.map((a) => a.action).sort()).toEqual(["employee.create", "employee.deactivate", "employee.update"]);
     for (const log of auditActions) {
       expect(log.actorType).toBe("COMPANY_USER");
     }

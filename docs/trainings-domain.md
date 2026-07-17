@@ -107,7 +107,7 @@ data, local, instrutor e capacidade.
 - `TrainingClass.companyTrainingId` é obrigatório e sempre validado como
   pertencente à empresa atual e `active` (`assertCompanyTrainingBelongsToCompany`,
   `lib/training-classes.ts`) — mesmo raciocínio de isolamento de
-  `assertReferencesBelongToCompany` (`lib/employees.ts`).
+  `validateEmployeeOrganizationReferences` (`lib/employees.ts`).
 - **Nunca é apagada** — não existe `DELETE /api/training-classes/[id]`. O
   ciclo de vida é só `status`: `SCHEDULED` (nasce assim, sempre — o wizard
   de criação não tem etapa de status) → `IN_PROGRESS` → `COMPLETED`, ou

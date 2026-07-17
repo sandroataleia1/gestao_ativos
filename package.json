@@ -18,6 +18,7 @@
     "diagnose:pre-m2": "tsx scripts/diagnose-pre-m2.ts",
     "diagnose:claim-flow-exposure": "tsx scripts/diagnose-claim-flow-exposure.ts",
     "diagnose:pending-claim-user-company": "tsx scripts/diagnose-pending-claim-user-company.ts",
+    "diagnose:employee-organization": "tsx scripts/diagnose-employee-organization.ts",
     "backfill:company-memberships": "tsx scripts/backfill-company-memberships.ts",
     "backfill:company-documents": "tsx scripts/backfill-company-documents.ts",
     "platform-admin:grant": "tsx scripts/platform-admin-grant.ts",
