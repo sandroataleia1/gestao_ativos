@@ -2,6 +2,7 @@ import type { Prisma, TrainingClassStatus } from "@/app/generated/prisma/client"
 import { prisma } from "@/lib/prisma";
 import { ValidationError } from "@/lib/api-errors";
 import { logAudit, type ActorInput } from "@/lib/audit";
+import { assertCapacityReductionAllowed } from "@/lib/training-participants";
 import type { TrainingClassInput } from "@/lib/validations/training-class";
 
 export const TRAINING_CLASS_SORT_FIELDS = ["title", "status", "startsAt"] as const;
@@ -192,6 +193,14 @@ export async function createTrainingClass(companyId: string, actor: ActorInput, 
  * `assertTrainingClassTransition` antes de qualquer escrita. Registra
  * `training_class.cancel` quando o novo status é CANCELLED e o anterior não
  * era (mais específico), senão `training_class.update`.
+ *
+ * Sprint SST 1.4G, §12/§28 — `maximumParticipants` nunca pode ficar abaixo
+ * da quantidade de inscrições ENROLLED atuais. A linha da turma é travada
+ * (`SELECT ... FOR UPDATE`, mesmo padrão de
+ * lib/training-participants.ts:enrollTrainingClassParticipants) ANTES de
+ * contar os inscritos — sem esse lock, uma inscrição concorrente poderia
+ * commitar entre a contagem e este UPDATE, deixando `maximumParticipants`
+ * abaixo do total real.
  */
 export async function updateTrainingClass(
   companyId: string,
@@ -207,6 +216,9 @@ export async function updateTrainingClass(
     input.status === "CANCELLED" && currentStatus !== "CANCELLED" ? "training_class.cancel" : "training_class.update";
 
   return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "TrainingClass" WHERE id = ${id} FOR UPDATE`;
+    await assertCapacityReductionAllowed(tx, id, input.maximumParticipants);
+
     const trainingClass = await tx.trainingClass.update({
       where: { id },
       data: {

@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ChevronRightIcon } from "lucide-react";
+import { AlertTriangleIcon, ChevronRightIcon, InfoIcon } from "lucide-react";
 
 import { prisma } from "@/lib/prisma";
-import { requireSstProviderCompanyAccessOrDeny, sstCanOperate } from "@/lib/sst-auth";
+import { requireSstTrainingParticipantViewAccessOrDeny, sstCanManageTrainingParticipants } from "@/lib/sst-auth";
 import { getParticipantsForClass } from "@/lib/training-participants";
+import { maskEmployeeDocument } from "@/lib/sst-employees";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { SstParticipantsTable } from "./sst-participants-table";
@@ -37,23 +39,30 @@ type RouteParams = { params: Promise<{ companyId: string; classId: string }> };
 
 export default async function SstClassDetailPage({ params }: RouteParams) {
   const { companyId, classId } = await params;
-  const ctx = await requireSstProviderCompanyAccessOrDeny(companyId);
-  const canManage = sstCanOperate(ctx);
+  const ctx = await requireSstTrainingParticipantViewAccessOrDeny(companyId, classId);
+  const canManage = sstCanManageTrainingParticipants(ctx);
 
-  const [trainingClass, participants, activeEmployees] = await Promise.all([
+  const [trainingClass, participants] = await Promise.all([
     prisma.trainingClass.findFirst({
       where: { id: classId, companyId },
       include: { companyTraining: { select: { id: true, title: true, validityMonths: true } } },
     }),
     getParticipantsForClass(companyId, classId),
-    prisma.employee.findMany({
-      where: { companyId, status: "ACTIVE" },
-      select: { id: true, name: true, document: true, registration: true },
-      orderBy: { name: "asc" },
-    }),
   ]);
 
   if (!trainingClass) notFound();
+
+  // Sprint SST 1.4G, §23/§25 — a página carrega participantes direto do
+  // serviço (não passa pela rota GET, que já mascara), então o documento
+  // precisa ser mascarado aqui antes de chegar à tabela client-side.
+  const maskedParticipants = participants.map((participant) => ({
+    ...participant,
+    employee: { ...participant.employee, document: maskEmployeeDocument(participant.employee.document) },
+  }));
+
+  const enrolledCount = participants.filter((p) => p.enrollmentStatus !== "CANCELLED").length;
+  const isReviewInProgress = ctx.company.controlStatus === "CLAIM_PENDING" || ctx.company.controlStatus === "DISPUTED";
+  const isProvisional = ctx.company.controlStatus === "UNCLAIMED";
 
   return (
     <div className="grid gap-6">
@@ -68,6 +77,31 @@ export default async function SstClassDetailPage({ params }: RouteParams) {
         <h1 className="text-2xl font-semibold">{trainingClass.title}</h1>
         <p className="text-sm text-muted-foreground">{trainingClass.companyTraining.title}</p>
       </div>
+
+      {isProvisional ? (
+        <Alert>
+          <InfoIcon />
+          <AlertDescription>
+            Esta empresa ainda não assumiu o cadastro na plataforma. Sua consultoria possui acesso provisório para
+            organizar os dados de SST. Quando a empresa assumir o controle, ela poderá manter, limitar ou bloquear
+            essa autorização.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {isReviewInProgress ? (
+        <Alert variant="destructive">
+          <AlertTriangleIcon />
+          <AlertDescription>
+            A empresa está revisando o controle do cadastro. Alterações estão temporariamente bloqueadas.
+          </AlertDescription>
+        </Alert>
+      ) : !canManage ? (
+        <Alert>
+          <InfoIcon />
+          <AlertDescription>Você possui acesso somente para consulta.</AlertDescription>
+        </Alert>
+      ) : null}
 
       <Card>
         <CardContent className="grid grid-cols-2 gap-4 pt-6 sm:grid-cols-3 lg:grid-cols-6">
@@ -94,7 +128,7 @@ export default async function SstClassDetailPage({ params }: RouteParams) {
           <div>
             <p className="text-xs text-muted-foreground">Participantes</p>
             <p className="text-sm">
-              {participants.length}
+              {enrolledCount}
               {trainingClass.maximumParticipants ? ` / ${trainingClass.maximumParticipants}` : ""}
             </p>
           </div>
@@ -106,8 +140,7 @@ export default async function SstClassDetailPage({ params }: RouteParams) {
         trainingClassId={trainingClass.id}
         trainingClassStatus={trainingClass.status}
         maximumParticipants={trainingClass.maximumParticipants}
-        initialParticipants={participants}
-        activeEmployees={activeEmployees}
+        initialParticipants={maskedParticipants}
         canManage={canManage}
       />
     </div>

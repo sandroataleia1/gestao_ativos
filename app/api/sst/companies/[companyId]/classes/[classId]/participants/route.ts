@@ -1,29 +1,29 @@
 import { NextResponse } from "next/server";
 
-import { prisma } from "@/lib/prisma";
 import {
   buildSstActor,
-  requireSstCompanyOperationAccess,
-  requireSstCompanyViewAccess,
+  requireSstTrainingParticipantManageAccess,
+  requireSstTrainingParticipantViewAccess,
 } from "@/lib/sst-auth";
-import { assertProviderManagesCompanyTraining } from "@/lib/sst-trainings";
-import { handleApiError, NotFoundError } from "@/lib/api-errors";
-import { addParticipants, getParticipantsForClass } from "@/lib/training-participants";
+import { enrollTrainingClassParticipants, getParticipantsForClass } from "@/lib/training-participants";
+import { maskEmployeeDocument } from "@/lib/sst-employees";
 import { trainingParticipantAddSchema } from "@/lib/validations/training-participant";
+import { handleApiError } from "@/lib/api-errors";
+import { requireTrustedMutationOrigin } from "@/lib/mutation-origin";
 
 type RouteParams = { params: Promise<{ companyId: string; classId: string }> };
 
+// Sprint SST 1.4G, §25 — documento sempre mascarado nesta rota (mesma
+// política de lib/sst-employees.ts para colaboradores).
 export async function GET(_request: Request, { params }: RouteParams) {
   try {
     const { companyId, classId } = await params;
-    await requireSstCompanyViewAccess(companyId);
-
-    const trainingClass = await prisma.trainingClass.findFirst({ where: { id: classId, companyId }, select: { id: true } });
-    if (!trainingClass) throw new NotFoundError("Turma não encontrada.");
+    await requireSstTrainingParticipantViewAccess(companyId, classId);
 
     const participants = await getParticipantsForClass(companyId, classId);
+    const masked = participants.map((p) => ({ ...p, employee: { ...p.employee, document: maskEmployeeDocument(p.employee.document) } }));
 
-    return NextResponse.json({ participants });
+    return NextResponse.json({ participants: masked });
   } catch (error) {
     return handleApiError(error);
   }
@@ -31,23 +31,21 @@ export async function GET(_request: Request, { params }: RouteParams) {
 
 export async function POST(request: Request, { params }: RouteParams) {
   try {
+    requireTrustedMutationOrigin(request);
     const { companyId, classId } = await params;
-    const ctx = await requireSstCompanyOperationAccess(companyId);
-
-    const trainingClass = await prisma.trainingClass.findFirst({
-      where: { id: classId, companyId },
-      select: { companyTrainingId: true },
-    });
-    if (!trainingClass) throw new NotFoundError("Turma não encontrada.");
-    await assertProviderManagesCompanyTraining(companyId, trainingClass.companyTrainingId, ctx.providerId);
+    const ctx = await requireSstTrainingParticipantManageAccess(companyId, classId);
 
     const body = await request.json();
     const input = trainingParticipantAddSchema.parse(body);
     const employeeIds = input.employeeIds?.length ? input.employeeIds : [input.employeeId!];
 
-    const participants = await addParticipants(companyId, buildSstActor(ctx), classId, employeeIds);
+    const result = await enrollTrainingClassParticipants(companyId, buildSstActor(ctx), classId, employeeIds);
+    const masked = {
+      ...result,
+      participants: result.participants.map((p) => ({ ...p, employee: { ...p.employee, document: maskEmployeeDocument(p.employee.document) } })),
+    };
 
-    return NextResponse.json({ participants }, { status: 201 });
+    return NextResponse.json(masked, { status: 201 });
   } catch (error) {
     return handleApiError(error);
   }

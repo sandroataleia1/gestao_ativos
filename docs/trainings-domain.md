@@ -21,6 +21,13 @@ Documento cumulativo do módulo de Treinamentos, atualizado a cada sprint.
   (`/sst`) — login próprio da consultoria (`SstProviderUser`), dashboard e
   visão por empresa com indicadores de conformidade calculados sob
   demanda, somente leitura. Detalhado em `docs/portal-consultoria.md`.
+- **Sprint SST 1.4G** entregou a etapa de **inscrição** de participantes em
+  ambos os portais (Empresa e Consultoria SST): remoção passou a ser
+  lógica (nunca mais apaga a linha), reentrada antes do início da turma
+  reaproveita a mesma inscrição, capacidade passou a ser protegida também
+  contra redução abaixo do número de inscritos, e a porta de "adicionar"
+  foi restrita a `SCHEDULED` (antes também permitia `IN_PROGRESS`). Ver
+  seção 7.1.
 
 Certificados, alertas de vencimento/reciclagem, relatórios e as demais
 telas do Portal Consultoria (treinamentos/turmas/participantes dentro do
@@ -144,16 +151,69 @@ o resto do sistema (custódia, movimentações, agora treinamento).
 
 | Ação | SCHEDULED | IN_PROGRESS | COMPLETED | CANCELLED |
 |---|---|---|---|---|
-| Adicionar participante | ✅ | ✅ | ❌ | ❌ |
-| Remover participante | ✅ | ❌ | ❌ | ❌ |
+| Adicionar/reativar participante | ✅ | ❌ | ❌ | ❌ |
+| Remover participante (lógico) | ✅ | ❌ | ❌ | ❌ |
 | Registrar presença/resultado/observação | ❌ | ✅ | ✅ | ❌ |
 
-Centralizado em `assertTrainingClassAllows` (`lib/training-participants.ts`).
-Remoção antes do início (`SCHEDULED`) é exclusão real da linha — depois
-disso, "remover" deixaria de fazer sentido, porque a matrícula já é
-histórico (a turma começou); por isso a partir de `IN_PROGRESS` a única
-forma de tirar alguém do resultado é registrando `ABSENT`/`FAILED`, nunca
-apagando o registro.
+Centralizado em `assertTrainingClassAllows` (`lib/training-participants.ts`),
+erro semântico `TRAINING_CLASS_PARTICIPANTS_LOCKED` (nunca revela qual regra
+específica bloqueou — mesma mensagem para adicionar/remover fora de
+`SCHEDULED`). **Mudança na Sprint SST 1.4G**: até então (Sprint 2),
+"adicionar" também era permitido com a turma `IN_PROGRESS` ("alguém chega
+atrasado"); esta sprint restringe deliberadamente para escopo de inscrição
+(execução/presença fica para a Sprint SST 1.4H) — ver seção 7.1.
+
+### 7.1. Inscrição, remoção lógica e reentrada (Sprint SST 1.4G)
+
+Até a Sprint 2, remover um participante com a turma ainda `SCHEDULED` era
+uma exclusão real da linha (`DELETE`) — considerado aceitável porque "a
+turma ainda nem começou, não é histórico ainda". A Sprint SST 1.4G **reverte
+essa decisão**: nenhuma remoção apaga a linha, mesmo antes do início da
+turma, para que uma reentrada (colaborador removido por engano, ou que
+volta a participar antes da turma começar) reaproveite a mesma inscrição em
+vez de criar uma segunda.
+
+- `TrainingParticipant.enrollmentStatus` (`ENROLLED`/`CANCELLED`) é um campo
+  **novo e ortogonal** a `attendanceStatus`/`resultStatus` — "a pessoa está
+  inscrita nesta turma" é uma pergunta diferente de "o que aconteceu com ela
+  durante/depois da turma" (essa segunda continua escopo da Sprint SST
+  1.4H). Nome deliberadamente evita qualquer termo de presença.
+- **Remover** (`cancelTrainingClassParticipant`) marca `CANCELLED` +
+  `cancelledAt`; nunca apaga a linha. Idempotente (remover quem já está
+  `CANCELLED` é no-op, sem nova auditoria).
+- **Reentrada** (mesmo fluxo de "adicionar", via
+  `enrollTrainingClassParticipants`): se o colaborador já teve uma inscrição
+  `CANCELLED` nesta turma, ela é reativada (mesma linha, `enrolledAt`
+  atualizado, `cancelledAt` zerado) — nunca cria uma segunda linha.
+  `createdAt` preserva sempre a primeira inscrição histórica. Reativação
+  também pode ser explícita a partir da própria listagem de participantes
+  (`reactivateTrainingClassParticipant`), sem passar pelo seletor de
+  colaboradores.
+- **Idempotência**: inscrever quem já está `ENROLLED` não cria linha nem
+  gera nova auditoria (contabilizado como `alreadyEnrolled` na resposta).
+- A unicidade `@@unique([companyId, trainingClassId, employeeId])` no banco
+  (pré-existente) é a rede de segurança que torna a reentrada "mesma linha"
+  a única opção possível — uma segunda linha para o mesmo par
+  turma+colaborador é sempre rejeitada pelo banco, nunca só pela regra de
+  negócio.
+- Um `CHECK` de banco (migração
+  `20260717121934_training_participant_enrollment_status`) garante
+  `cancelledAt` preenchido se e somente se `enrollmentStatus = CANCELLED`.
+- **Capacidade** (`maximumParticipants`) só conta inscrições `ENROLLED` —
+  uma `CANCELLED` nunca ocupa vaga, liberando espaço para outro colaborador.
+  A checagem roda dentro de uma transação que trava a linha da
+  `TrainingClass` (`SELECT ... FOR UPDATE`) antes de contar/gravar, para que
+  duas inscrições concorrentes nunca estourem o limite (Read Committed do
+  Postgres, sem o lock, permitiria que ambas contassem a mesma capacidade
+  disponível antes de qualquer uma comitar).
+- **Redução de capacidade**: editar `maximumParticipants` de uma turma
+  (`updateTrainingClass`) para um valor menor que o número de inscritos
+  `ENROLLED` é bloqueado (`assertCapacityReductionAllowed`), sob o mesmo
+  lock de linha — mesmo sob concorrência com uma inscrição simultânea.
+- Colaborador inativado (`Employee.status != ACTIVE`) nunca pode ser
+  inscrito nem reativado numa turma; uma inscrição já existente não é
+  desfeita automaticamente por causa disso — a UI mostra um aviso
+  ("Colaborador inativo") na listagem.
 
 ### Regras de presença e resultado
 
@@ -199,6 +259,16 @@ a propriedade (continua sempre da empresa). Detalhado em
   RBAC do resto do sistema).
 - Ainda **não existe** login/portal/usuário de consultoria — a gestão do
   vínculo é inteiramente do lado da empresa nesta etapa.
+- **Isolamento entre consultorias na gestão de participantes** (Sprint SST
+  1.4G): `requireSstTrainingParticipantManageAccess`
+  (`lib/sst-auth.ts`) reaproveita `assertProviderManagesCompanyTraining`
+  (`lib/sst-trainings.ts`, já usada por turma/`CompanyTraining` desde antes
+  desta sprint) — só a consultoria que gerencia aquele `CompanyTraining`
+  especificamente (`managementMode: EXTERNAL_PROVIDER` +
+  `managedByProviderId`) pode incluir/remover/reativar participantes.
+  Leitura é deliberadamente mais permissiva: qualquer vínculo `ACTIVE` com a
+  empresa enxerga participantes de qualquer turma (mesma política já usada
+  na listagem de turmas).
 
 ## 9. Limitações atuais
 
@@ -220,11 +290,10 @@ a propriedade (continua sempre da empresa). Detalhado em
   participantes).
 - `TrainingTemplate` é somente leitura via API — toda manutenção do
   catálogo inicial é via seed/banco, sem UI.
-- Lista de colaboradores ativos no diálogo de "Adicionar participantes" não
-  é paginada (busca client-side sobre a lista inteira) — mesma limitação já
-  registrada em `docs/performance.md` para listas de apoio com empresas de
-  milhares de colaboradores; aceitável para o volume esperado agora, não
-  resolvido nesta entrega.
+- Presença, ausência, justificativa, resultado, conclusão, certificado,
+  assinatura de lista de presença, evidências, avaliação/nota, validade/
+  renovação e alertas de vencimento continuam fora do escopo de inscrição
+  entregue na Sprint SST 1.4G — ver Sprint SST 1.4H.
 
 ## 10. Próximos passos
 

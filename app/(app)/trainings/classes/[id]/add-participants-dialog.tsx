@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2Icon, SearchIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,12 +19,18 @@ import {
 } from "@/components/ui/dialog";
 import type { EmployeeOption } from "./types";
 
+const DEBOUNCE_MS = 300;
+const PAGE_SIZE = 20;
+
+// Sprint SST 1.4G, §24 — busca/paginação server-side (nunca carrega todos
+// os Employees ACTIVE da empresa de uma vez, ver GET
+// /api/training-classes/[id]/eligible-employees). Cada linha já vem com
+// `enrollmentStatus` (null/ENROLLED/CANCELLED) para distinguir "nunca
+// inscrito" de "removido, pode reativar" sem uma segunda chamada.
 export function AddParticipantsDialog({
   open,
   onOpenChange,
   trainingClassId,
-  activeEmployees,
-  existingEmployeeIds,
   maximumParticipants,
   currentParticipantCount,
   onAdded,
@@ -31,30 +38,55 @@ export function AddParticipantsDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   trainingClassId: string;
-  activeEmployees: EmployeeOption[];
-  existingEmployeeIds: Set<string>;
   maximumParticipants: number | null;
   currentParticipantCount: number;
   onAdded: () => void;
 }) {
   const [search, setSearch] = useState("");
+  const [employees, setEmployees] = useState<EmployeeOption[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [isLoading, setIsLoading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const filteredEmployees = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return activeEmployees;
-    return activeEmployees.filter((employee) =>
-      [employee.name, employee.document, employee.registration ?? ""]
-        .join(" ")
-        .toLowerCase()
-        .includes(query),
-    );
-  }, [activeEmployees, search]);
+  async function loadPage(nextPage: number, searchTerm: string, append: boolean) {
+    setIsLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(nextPage), pageSize: String(PAGE_SIZE) });
+      if (searchTerm) params.set("q", searchTerm);
+      const response = await fetch(`/api/training-classes/${trainingClassId}/eligible-employees?${params.toString()}`);
+      if (!response.ok) throw new Error("request_failed");
+      const data = (await response.json()) as { employees: EmployeeOption[]; total: number };
+      setEmployees((prev) => (append ? [...prev, ...data.employees] : data.employees));
+      setTotal(data.total);
+      setPage(nextPage);
+    } catch {
+      setFormError("Não foi possível carregar os colaboradores.");
+    } finally {
+      setIsLoading(false);
+    }
+  }
 
-  const remainingCapacity =
-    maximumParticipants !== null ? maximumParticipants - currentParticipantCount : null;
+  useEffect(() => {
+    if (!open) return;
+    loadPage(1, "", false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => loadPage(1, search, false), DEBOUNCE_MS);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, open]);
+
+  const remainingCapacity = maximumParticipants !== null ? maximumParticipants - currentParticipantCount : null;
   const exceedsCapacity = remainingCapacity !== null && selected.size > remainingCapacity;
 
   function toggleEmployee(employeeId: string, checked: boolean) {
@@ -70,6 +102,7 @@ export function AddParticipantsDialog({
     setSearch("");
     setSelected(new Set());
     setFormError(null);
+    setEmployees([]);
     onOpenChange(false);
   }
 
@@ -91,9 +124,9 @@ export function AddParticipantsDialog({
         return;
       }
 
-      toast.success(
-        selected.size === 1 ? "Participante adicionado." : `${selected.size} participantes adicionados.`,
-      );
+      const data = (await response.json()) as { created: number; reactivated: number };
+      const total = data.created + data.reactivated;
+      toast.success(total === 1 ? "Participante adicionado." : `${total} participantes adicionados.`);
       onAdded();
       resetAndClose();
     } catch {
@@ -102,6 +135,8 @@ export function AddParticipantsDialog({
       setIsSubmitting(false);
     }
   }
+
+  const hasMore = employees.length < total;
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && resetAndClose()}>
@@ -125,33 +160,50 @@ export function AddParticipantsDialog({
           </div>
 
           <div className="grid max-h-72 gap-1 overflow-y-auto rounded-lg border p-2">
-            {filteredEmployees.length ? (
-              filteredEmployees.map((employee) => {
-                const alreadyIn = existingEmployeeIds.has(employee.id);
-                return (
-                  <Label
-                    key={employee.id}
-                    className={`flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm ${
-                      alreadyIn ? "opacity-50" : "hover:bg-muted/60"
-                    }`}
-                  >
-                    <Checkbox
-                      checked={alreadyIn || selected.has(employee.id)}
-                      disabled={alreadyIn}
-                      onCheckedChange={(checked) => toggleEmployee(employee.id, checked === true)}
-                    />
-                    <span className="flex-1">
-                      {employee.name}
-                      <span className="ml-1.5 text-xs text-muted-foreground">
-                        {employee.registration ?? employee.document}
+            {isLoading && employees.length === 0 ? (
+              <p className="flex items-center justify-center gap-2 px-2 py-4 text-sm text-muted-foreground">
+                <Loader2Icon className="size-4 animate-spin" /> Carregando…
+              </p>
+            ) : employees.length ? (
+              <>
+                {employees.map((employee) => {
+                  const alreadyEnrolled = employee.enrollmentStatus === "ENROLLED";
+                  const canReactivate = employee.enrollmentStatus === "CANCELLED";
+                  return (
+                    <Label
+                      key={employee.id}
+                      className={`flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm ${
+                        alreadyEnrolled ? "opacity-50" : "hover:bg-muted/60"
+                      }`}
+                    >
+                      <Checkbox
+                        checked={alreadyEnrolled || selected.has(employee.id)}
+                        disabled={alreadyEnrolled}
+                        onCheckedChange={(checked) => toggleEmployee(employee.id, checked === true)}
+                      />
+                      <span className="flex-1">
+                        {employee.name}
+                        <span className="ml-1.5 text-xs text-muted-foreground">
+                          {employee.registration ?? employee.document}
+                        </span>
                       </span>
-                    </span>
-                    {alreadyIn ? (
-                      <span className="text-xs text-muted-foreground">Já está na turma</span>
-                    ) : null}
-                  </Label>
-                );
-              })
+                      {alreadyEnrolled ? (
+                        <span className="text-xs text-muted-foreground">Já está na turma</span>
+                      ) : canReactivate ? (
+                        <Badge variant="outline" className="text-xs">
+                          Removido — reativar
+                        </Badge>
+                      ) : null}
+                    </Label>
+                  );
+                })}
+                {hasMore ? (
+                  <Button variant="ghost" size="sm" disabled={isLoading} onClick={() => loadPage(page + 1, search, true)}>
+                    {isLoading ? <Loader2Icon className="size-3.5 animate-spin" /> : null}
+                    Carregar mais
+                  </Button>
+                ) : null}
+              </>
             ) : (
               <p className="px-2 py-4 text-center text-sm text-muted-foreground">
                 Nenhum colaborador encontrado.

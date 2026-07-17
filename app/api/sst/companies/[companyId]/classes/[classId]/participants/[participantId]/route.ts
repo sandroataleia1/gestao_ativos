@@ -1,51 +1,50 @@
 import { NextResponse } from "next/server";
 
-import { prisma } from "@/lib/prisma";
-import { buildSstActor, requireSstCompanyOperationAccess } from "@/lib/sst-auth";
-import { assertProviderManagesCompanyTraining } from "@/lib/sst-trainings";
-import { handleApiError, NotFoundError } from "@/lib/api-errors";
-import { removeParticipant, updateParticipant } from "@/lib/training-participants";
+import { buildSstActor, requireSstTrainingParticipantManageAccess } from "@/lib/sst-auth";
+import { cancelTrainingClassParticipant, updateParticipant } from "@/lib/training-participants";
+import { maskEmployeeDocument } from "@/lib/sst-employees";
 import { trainingParticipantUpdateSchema } from "@/lib/validations/training-participant";
+import { handleApiError } from "@/lib/api-errors";
+import { requireTrustedMutationOrigin } from "@/lib/mutation-origin";
 
 type RouteParams = { params: Promise<{ companyId: string; classId: string; participantId: string }> };
 
-async function assertClassManagedByProvider(companyId: string, classId: string, providerId: string) {
-  const trainingClass = await prisma.trainingClass.findFirst({
-    where: { id: classId, companyId },
-    select: { companyTrainingId: true },
-  });
-  if (!trainingClass) throw new NotFoundError("Turma não encontrada.");
-  await assertProviderManagesCompanyTraining(companyId, trainingClass.companyTrainingId, providerId);
+function maskParticipant<T extends { employee: { document: string } }>(participant: T) {
+  return { ...participant, employee: { ...participant.employee, document: maskEmployeeDocument(participant.employee.document) } };
 }
 
+// Presença/resultado — escopo da Sprint SST 1.4H, preservado sem alteração
+// funcional nesta sprint (só ganhou requireTrustedMutationOrigin, que
+// faltava, e o guard consolidado com estado de Company — antes usava
+// requireSstCompanyOperationAccess sem checar operationalStatus/controlStatus).
 export async function PUT(request: Request, { params }: RouteParams) {
   try {
+    requireTrustedMutationOrigin(request);
     const { companyId, classId, participantId } = await params;
-    const ctx = await requireSstCompanyOperationAccess(companyId);
-    await assertClassManagedByProvider(companyId, classId, ctx.providerId);
+    const ctx = await requireSstTrainingParticipantManageAccess(companyId, classId);
 
     const body = await request.json();
     const input = trainingParticipantUpdateSchema.parse(body);
 
     const participant = await updateParticipant(companyId, buildSstActor(ctx), classId, participantId, input);
 
-    return NextResponse.json({ participant });
+    return NextResponse.json({ participant: maskParticipant(participant) });
   } catch (error) {
     return handleApiError(error);
   }
 }
 
-// Remoção real (não soft-delete) — só permitida quando a turma ainda nem
-// começou (SCHEDULED), regra já aplicada dentro de removeParticipant.
-export async function DELETE(_request: Request, { params }: RouteParams) {
+// Sprint SST 1.4G — remoção LÓGICA (nunca mais hard delete) — ver
+// lib/training-participants.ts:cancelTrainingClassParticipant.
+export async function DELETE(request: Request, { params }: RouteParams) {
   try {
+    requireTrustedMutationOrigin(request);
     const { companyId, classId, participantId } = await params;
-    const ctx = await requireSstCompanyOperationAccess(companyId);
-    await assertClassManagedByProvider(companyId, classId, ctx.providerId);
+    const ctx = await requireSstTrainingParticipantManageAccess(companyId, classId);
 
-    await removeParticipant(companyId, buildSstActor(ctx), classId, participantId);
+    const participant = await cancelTrainingClassParticipant(companyId, buildSstActor(ctx), classId, participantId);
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ participant: maskParticipant(participant) });
   } catch (error) {
     return handleApiError(error);
   }

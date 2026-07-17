@@ -52,8 +52,16 @@ export type AuditAction =
   | "training_class.create"
   | "training_class.update"
   | "training_class.cancel"
+  // Sprint SST 1.4G — "add"/"remove" preservados só por compatibilidade de
+  // tipo com linhas de auditoria já gravadas (nenhuma migração de dado
+  // histórico é feita); código novo usa enroll/cancel/reactivate, que
+  // distinguem inscrição idempotente/reativação de uma remoção real
+  // (agora lógica, nunca hard delete — ver lib/training-participants.ts).
   | "training_participant.add"
   | "training_participant.remove"
+  | "training_participant.enroll"
+  | "training_participant.cancel"
+  | "training_participant.reactivate"
   | "training_participant.attendance_update"
   | "training_participant.result_update"
   | "sst_provider.create"

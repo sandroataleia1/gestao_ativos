@@ -36,13 +36,12 @@ function isExpired(date: Date | string | null) {
   return Boolean(date && new Date(date).getTime() < Date.now());
 }
 
-type EmployeeOption = { id: string; name: string; document: string; registration: string | null };
-
 type ParticipantRow = {
   id: string;
   employeeId: string;
   attendanceStatus: string;
   resultStatus: string;
+  enrollmentStatus: "ENROLLED" | "CANCELLED";
   completedAt: Date | string | null;
   expiresAt: Date | string | null;
   notes: string | null;
@@ -50,6 +49,7 @@ type ParticipantRow = {
     name: string;
     document: string;
     registration: string | null;
+    status: string;
     department: { name: string } | null;
     position: { name: string } | null;
   };
@@ -57,16 +57,16 @@ type ParticipantRow = {
 
 // Espelha app/(app)/trainings/classes/[id]/participants-table.tsx, apontando
 // para /api/sst/* em vez de /api/training-classes/* — mesmas regras de
-// canAdd/canRemove/canRecord pelo status da turma (assertTrainingClassAllows,
-// lib/training-participants.ts), reaproveitadas sem duplicação de lógica no
-// servidor.
+// canAdd/canRemove/canReactivate/canRecord pelo status da turma
+// (assertTrainingClassAllows, lib/training-participants.ts), reaproveitadas
+// sem duplicação de lógica no servidor. O documento já chega mascarado
+// (aplicado em page.tsx e nas respostas das rotas /api/sst/*).
 export function SstParticipantsTable({
   companyId,
   trainingClassId,
   trainingClassStatus,
   maximumParticipants,
   initialParticipants,
-  activeEmployees,
   canManage,
 }: {
   companyId: string;
@@ -74,7 +74,6 @@ export function SstParticipantsTable({
   trainingClassStatus: string;
   maximumParticipants: number | null;
   initialParticipants: ParticipantRow[];
-  activeEmployees: EmployeeOption[];
   canManage: boolean;
 }) {
   const router = useRouter();
@@ -87,11 +86,13 @@ export function SstParticipantsTable({
   const [pendingParticipantId, setPendingParticipantId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const canAdd = canManage && (trainingClassStatus === "SCHEDULED" || trainingClassStatus === "IN_PROGRESS");
+  const canAdd = canManage && trainingClassStatus === "SCHEDULED";
   const canRemove = canManage && trainingClassStatus === "SCHEDULED";
+  const canReactivate = canManage && trainingClassStatus === "SCHEDULED";
   const canRecord = canManage && (trainingClassStatus === "IN_PROGRESS" || trainingClassStatus === "COMPLETED");
 
   const baseUrl = `/api/sst/companies/${companyId}/classes/${trainingClassId}/participants`;
+  const activeParticipants = initialParticipants.filter((p) => p.enrollmentStatus !== "CANCELLED");
 
   async function updateParticipant(participantId: string, payload: Record<string, unknown>) {
     setPendingParticipantId(participantId);
@@ -134,6 +135,23 @@ export function SstParticipantsTable({
     }
   }
 
+  async function handleReactivate(participant: ParticipantRow) {
+    setPendingParticipantId(participant.id);
+    setActionError(null);
+    try {
+      const response = await fetch(`${baseUrl}/${participant.id}/reactivate`, { method: "POST" });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error ?? "Não foi possível reativar o participante.");
+      }
+      router.refresh();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Erro inesperado.");
+    } finally {
+      setPendingParticipantId(null);
+    }
+  }
+
   async function handleSaveNotes() {
     if (!notesTarget) return;
     setIsSavingNotes(true);
@@ -141,8 +159,6 @@ export function SstParticipantsTable({
     setIsSavingNotes(false);
     if (ok) setNotesTarget(null);
   }
-
-  const existingEmployeeIds = new Set(initialParticipants.map((p) => p.employeeId));
 
   return (
     <div className="grid gap-4">
@@ -157,7 +173,6 @@ export function SstParticipantsTable({
       </div>
 
       {actionError ? <p className="text-sm text-destructive">{actionError}</p> : null}
-      {!canManage ? <p className="text-sm text-muted-foreground">Você possui acesso somente para consulta.</p> : null}
 
       <div className="rounded-xl border bg-card">
         <Table>
@@ -178,14 +193,24 @@ export function SstParticipantsTable({
             {initialParticipants.length ? (
               initialParticipants.map((participant) => {
                 const isPending = pendingParticipantId === participant.id;
+                const isCancelled = participant.enrollmentStatus === "CANCELLED";
+                const isEmployeeInactive = participant.employee.status !== "ACTIVE";
                 return (
-                  <TableRow key={participant.id}>
-                    <TableCell>{participant.employee.name}</TableCell>
+                  <TableRow key={participant.id} className={isCancelled ? "opacity-60" : undefined}>
+                    <TableCell>
+                      <div className="flex items-center gap-1.5">
+                        {participant.employee.name}
+                        {isCancelled ? <Badge variant="outline">Removido</Badge> : null}
+                        {isEmployeeInactive ? <Badge variant="destructive">Colaborador inativo</Badge> : null}
+                      </div>
+                    </TableCell>
                     <TableCell>{participant.employee.registration ?? participant.employee.document}</TableCell>
                     <TableCell>{participant.employee.department?.name ?? "—"}</TableCell>
                     <TableCell>{participant.employee.position?.name ?? "—"}</TableCell>
                     <TableCell>
-                      {canRecord ? (
+                      {isCancelled ? (
+                        "—"
+                      ) : canRecord ? (
                         <Select
                           items={ATTENDANCE_LABELS}
                           value={participant.attendanceStatus}
@@ -208,7 +233,9 @@ export function SstParticipantsTable({
                       )}
                     </TableCell>
                     <TableCell>
-                      {canRecord ? (
+                      {isCancelled ? (
+                        "—"
+                      ) : canRecord ? (
                         <Select
                           items={RESULT_LABELS}
                           value={participant.resultStatus}
@@ -240,9 +267,11 @@ export function SstParticipantsTable({
                         </Badge>
                       )}
                     </TableCell>
-                    <TableCell>{formatDate(participant.completedAt)}</TableCell>
+                    <TableCell>{isCancelled ? "—" : formatDate(participant.completedAt)}</TableCell>
                     <TableCell>
-                      {participant.expiresAt ? (
+                      {isCancelled ? (
+                        "—"
+                      ) : participant.expiresAt ? (
                         <span className="flex items-center gap-1.5">
                           {formatDate(participant.expiresAt)}
                           {isExpired(participant.expiresAt) ? <Badge variant="destructive">Vencido</Badge> : null}
@@ -270,18 +299,29 @@ export function SstParticipantsTable({
                               <TooltipContent>Ações</TooltipContent>
                             </Tooltip>
                             <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                disabled={!canRecord}
-                                onClick={() => {
-                                  setNotesTarget(participant);
-                                  setNotesDraft(participant.notes ?? "");
-                                }}
-                              >
-                                Editar observação
-                              </DropdownMenuItem>
-                              <DropdownMenuItem variant="destructive" disabled={!canRemove} onClick={() => setRemoveTarget(participant)}>
-                                Remover participante
-                              </DropdownMenuItem>
+                              {isCancelled ? (
+                                <DropdownMenuItem
+                                  disabled={!canReactivate || isEmployeeInactive}
+                                  onClick={() => handleReactivate(participant)}
+                                >
+                                  Reativar participante
+                                </DropdownMenuItem>
+                              ) : (
+                                <>
+                                  <DropdownMenuItem
+                                    disabled={!canRecord}
+                                    onClick={() => {
+                                      setNotesTarget(participant);
+                                      setNotesDraft(participant.notes ?? "");
+                                    }}
+                                  >
+                                    Editar observação
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem variant="destructive" disabled={!canRemove} onClick={() => setRemoveTarget(participant)}>
+                                    Remover participante
+                                  </DropdownMenuItem>
+                                </>
+                              )}
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </div>
@@ -314,10 +354,8 @@ export function SstParticipantsTable({
         onOpenChange={setAddDialogOpen}
         companyId={companyId}
         trainingClassId={trainingClassId}
-        activeEmployees={activeEmployees}
-        existingEmployeeIds={existingEmployeeIds}
         maximumParticipants={maximumParticipants}
-        currentParticipantCount={initialParticipants.length}
+        currentParticipantCount={activeParticipants.length}
         onAdded={() => router.refresh()}
       />
 
@@ -344,7 +382,10 @@ export function SstParticipantsTable({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Remover participante?</AlertDialogTitle>
-            <AlertDialogDescription>{removeTarget?.employee.name} será removido desta turma.</AlertDialogDescription>
+            <AlertDialogDescription>
+              {removeTarget?.employee.name} será removido desta turma. O histórico é mantido e a inscrição pode ser
+              reativada enquanto a turma estiver agendada.
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={isRemoving}>Cancelar</AlertDialogCancel>

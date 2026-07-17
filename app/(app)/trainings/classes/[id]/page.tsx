@@ -41,20 +41,20 @@ export default async function TrainingClassDetailPage({
   const { companyId } = await requirePermissionOrDeny(PERMISSIONS.TRAINING_VIEW);
   const canManage = await hasPermission(PERMISSIONS.TRAINING_MANAGE);
 
-  const [trainingClass, participants, activeEmployees] = await Promise.all([
+  const [trainingClass, participants] = await Promise.all([
     prisma.trainingClass.findFirst({
       where: { id, companyId },
       include: { companyTraining: { select: { id: true, title: true, validityMonths: true } } },
     }),
     getParticipantsForClass(companyId, id),
-    prisma.employee.findMany({
-      where: { companyId, status: "ACTIVE" },
-      select: { id: true, name: true, document: true, registration: true },
-      orderBy: { name: "asc" },
-    }),
   ]);
 
   if (!trainingClass) notFound();
+
+  // Sprint SST 1.4G — a contagem exibida (e o cálculo de vagas restantes no
+  // diálogo de adição) considera só inscrições ENROLLED; CANCELLED fica no
+  // histórico mas não ocupa vaga.
+  const enrolledCount = participants.filter((p) => p.enrollmentStatus !== "CANCELLED").length;
 
   return (
     <div className="grid gap-6">
@@ -92,7 +92,7 @@ export default async function TrainingClassDetailPage({
           <div>
             <p className="text-xs text-muted-foreground">Participantes</p>
             <p className="text-sm">
-              {participants.length}
+              {enrolledCount}
               {trainingClass.maximumParticipants ? ` / ${trainingClass.maximumParticipants}` : ""}
             </p>
           </div>
@@ -104,7 +104,6 @@ export default async function TrainingClassDetailPage({
         trainingClassStatus={trainingClass.status}
         maximumParticipants={trainingClass.maximumParticipants}
         initialParticipants={participants}
-        activeEmployees={activeEmployees}
         canManage={canManage}
       />
     </div>

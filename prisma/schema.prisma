@@ -1449,6 +1449,18 @@ enum TrainingResultStatus {
   FAILED
 }
 
+// Sprint SST 1.4G — inscrição (matrícula) é um conceito distinto de
+// presença/resultado (`attendanceStatus`/`resultStatus`, escopo da Sprint
+// SST 1.4H): "a pessoa está inscrita nesta turma" vs. "o que aconteceu com
+// ela durante/depois da turma". Campo próprio em vez de reaproveitar
+// `attendanceStatus` porque ENROLLED ali já significa "inscrito, presença
+// ainda não registrada" — misturar um terceiro estado nesse mesmo enum
+// tornaria "ENROLLED" ambíguo (inscrito-ativo vs. inscrito-mas-cancelado).
+enum TrainingParticipantEnrollmentStatus {
+  ENROLLED
+  CANCELLED
+}
+
 model TrainingParticipant {
   id               String                    @id @default(cuid())
   companyId        String
@@ -1457,9 +1469,23 @@ model TrainingParticipant {
   trainingClass    TrainingClass             @relation(fields: [trainingClassId], references: [id])
   employeeId       String
   employee         Employee                  @relation(fields: [employeeId], references: [id])
+  // Sprint SST 1.4G — ciclo de inscrição atual (ENROLLED/CANCELLED),
+  // independente de attendanceStatus/resultStatus. Remoção de participante
+  // (enquanto a turma ainda está SCHEDULED) passou a ser lógica: nunca mais
+  // apaga a linha, marca CANCELLED. Reentrada antes do início da turma
+  // reaproveita a MESMA linha (nunca cria uma segunda) — ver
+  // lib/training-participants.ts:enrollTrainingClassParticipants.
+  enrollmentStatus TrainingParticipantEnrollmentStatus @default(ENROLLED)
   attendanceStatus TrainingAttendanceStatus  @default(ENROLLED)
   resultStatus     TrainingResultStatus      @default(PENDING)
+  // Representa o INÍCIO DO CICLO ATIVO atual (atualizado a cada reentrada
+  // após um CANCELLED) — nunca a primeira inscrição histórica, que é
+  // sempre `createdAt` (nunca sobrescrito). Ver §7 da Sprint SST 1.4G.
   enrolledAt       DateTime                  @default(now())
+  // Preenchido quando enrollmentStatus vira CANCELLED; sempre null quando
+  // ENROLLED (nunca os dois ao mesmo tempo — ver CHECK constraint na
+  // migration).
+  cancelledAt      DateTime?
   // Setado tanto em APPROVED quanto em FAILED (quando a avaliação
   // termina) — só `expiresAt` é exclusivo de APPROVED. Ver
   // docs/trainings-domain.md.
@@ -1473,6 +1499,10 @@ model TrainingParticipant {
   @@index([companyId])
   @@index([trainingClassId])
   @@index([employeeId])
+  // Sprint SST 1.4G — toda checagem de capacidade filtra exatamente por
+  // esses dois campos juntos (contar ENROLLED de uma turma), sempre dentro
+  // da transação que já trava a linha da TrainingClass.
+  @@index([trainingClassId, enrollmentStatus])
   // Composto (não `expiresAt` isolado) porque toda leitura de vencimento é
   // sempre por empresa — mesmo padrão de alerta já usado no resto do
   // sistema (nunca uma varredura global). A futura sprint de alertas filtra

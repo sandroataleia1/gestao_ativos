@@ -81,6 +81,50 @@ export async function createTestEmployee(companyId: string, label = "emp") {
   });
 }
 
+// Sprint SST 1.4G — fábricas para o domínio de turmas/participantes
+// (CompanyTraining/TrainingClass/TrainingParticipant), primeiro conjunto de
+// testes a criar estas fixtures diretamente via este helper.
+export async function createTestCompanyTraining(
+  companyId: string,
+  overrides?: Partial<{
+    managementMode: "INTERNAL" | "EXTERNAL_PROVIDER";
+    managedByProviderId: string | null;
+  }>,
+  label = "training",
+) {
+  return prisma.companyTraining.create({
+    data: {
+      companyId,
+      title: `${TEST_PREFIX}${label}-${uid()}`,
+      trainingType: "LEGAL",
+      managementMode: overrides?.managementMode ?? "INTERNAL",
+      managedByProviderId: overrides?.managedByProviderId ?? null,
+    },
+  });
+}
+
+export async function createTestTrainingClass(
+  companyId: string,
+  companyTrainingId: string,
+  overrides?: Partial<{
+    status: "SCHEDULED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
+    maximumParticipants: number | null;
+    startsAt: Date;
+  }>,
+  label = "class",
+) {
+  return prisma.trainingClass.create({
+    data: {
+      companyId,
+      companyTrainingId,
+      title: `${TEST_PREFIX}${label}-${uid()}`,
+      status: overrides?.status ?? "SCHEDULED",
+      startsAt: overrides?.startsAt ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      maximumParticipants: overrides?.maximumParticipants,
+    },
+  });
+}
+
 export async function createTestProvider(label = "prov") {
   return prisma.sstProvider.create({
     data: { name: `${TEST_PREFIX}${label}-${uid()}`, active: true },
@@ -254,6 +298,14 @@ export async function cleanupFixtures(params: {
     await prisma.location.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.locationType.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.movementType.deleteMany({ where: { companyId: { in: companyIds } } });
+    // TrainingParticipant/TrainingClass/CompanyTraining.companyId usam
+    // onDelete: Restrict — TrainingParticipant referencia Employee e
+    // TrainingClass também, então precisam sair antes do
+    // `employee.deleteMany` abaixo (Sprint SST 1.4G — primeiro teste a criar
+    // estas fixtures diretamente via este helper).
+    await prisma.trainingParticipant.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.trainingClass.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.companyTraining.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.employee.deleteMany({ where: { companyId: { in: companyIds } } });
     // Department/Position.companyId usam onDelete padrão (Restrict) — só
     // passaram a ser criados diretamente por testes na Sprint SST 1.4F.1

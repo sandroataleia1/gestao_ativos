@@ -2,6 +2,8 @@ import { forbidden, unauthorized } from "next/navigation";
 
 import { AuthError, ForbiddenError, requireAuth } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
+import { NotFoundError } from "@/lib/api-errors";
+import { assertProviderManagesCompanyTraining } from "@/lib/sst-trainings";
 import type { SstProviderUserRole } from "@/app/generated/prisma/client";
 
 // Autorização do Portal Consultoria SST (rotas /sst e /api/sst) — módulo
@@ -112,17 +114,22 @@ export async function requireSstCompanyAdministrationAccess(companyId: string) {
   return ctx;
 }
 
-// --- Sprint SST 1.4F — colaboradores (Employee) geridos pela consultoria ---
+// --- Sprint SST 1.4F/1.4G — recursos geridos pela consultoria com estado
+// --- de Company (colaboradores, participantes de turma) ---
 //
 // Guard dedicado (em vez de reaproveitar requireSstCompanyOperationAccess
-// diretamente): Employee tem uma dimensão extra que treinamento não tem —
-// o estado de CONTROLE da Company (`controlStatus`). Uma claim em análise
+// diretamente): tanto Employee (1.4F) quanto inscrição em turma (1.4G) têm
+// uma dimensão extra que a gestão comum de treinamento não tinha — o estado
+// de CONTROLE da Company (`controlStatus`). Uma claim em análise
 // (CLAIM_PENDING) ou disputada (DISPUTED) nunca pode ser mutada pela
-// consultoria (§8 do spec da sprint), mas continua podendo ser LIDA
-// enquanto o vínculo seguir ACTIVE — daí dois guards com política
-// diferente, não um só. Nenhum dos dois consulta User.companyId/
+// consultoria (§8/§15 dos specs), mas continua podendo ser LIDA enquanto o
+// vínculo seguir ACTIVE — daí dois guards com política diferente por
+// recurso, nunca um só genérico. Nenhum consulta User.companyId/
 // active_company_id — só a sessão (via requireSstAuth) e o banco, sempre
-// revalidados a cada request.
+// revalidados a cada request. `resolveSstCompanyAccessState` é a base
+// compartilhada (vínculo + estado da Company); cada recurso (Employee,
+// TrainingClassParticipant) empilha sua própria checagem de
+// papel/accessLevel/isolamento por cima.
 
 /** Erro de domínio estável (mesmo padrão de CompanyClaimPendingError em
  * lib/auth-server.ts) — nunca revela identidade do solicitante, motivo da
@@ -146,7 +153,12 @@ type EmployeeAccessCompany = {
   controlStatus: "UNCLAIMED" | "CLAIM_PENDING" | "CLAIMED" | "DISPUTED";
 };
 
-async function resolveEmployeeAccessLink(companyId: string) {
+/** Base compartilhada: resolve o vínculo ACTIVE + estado da Company
+ * (operationalStatus/controlStatus), incluindo o caso UNCLAIMED (só a
+ * consultoria que pré-cadastrou, via PROVIDER_PRE_REGISTRATION). Usada
+ * tanto pelos guards de Employee (1.4F) quanto de participante de turma
+ * (1.4G) — nunca duplicada por recurso. */
+async function resolveSstCompanyAccessState(companyId: string) {
   const ctx = await requireSstAuth();
   const link = await prisma.sstProviderCompany.findFirst({
     where: { providerId: ctx.providerId, companyId, status: "ACTIVE" },
@@ -185,7 +197,7 @@ async function resolveEmployeeAccessLink(companyId: string) {
  * requireSstProviderEmployeeManageAccess).
  */
 export async function requireSstProviderEmployeeViewAccess(companyId: string) {
-  return resolveEmployeeAccessLink(companyId);
+  return resolveSstCompanyAccessState(companyId);
 }
 
 /**
@@ -196,7 +208,7 @@ export async function requireSstProviderEmployeeViewAccess(companyId: string) {
  * toda mutação, mesmo para quem já tinha ADMINISTRATION antes da claim).
  */
 export async function requireSstProviderEmployeeManageAccess(companyId: string) {
-  const ctx = await resolveEmployeeAccessLink(companyId);
+  const ctx = await resolveSstCompanyAccessState(companyId);
   assertRoleCanWrite(ctx.sstProviderUser.role);
   if (ctx.link.accessLevel === "VIEW") {
     throw new ForbiddenError("Esta consultoria só tem acesso de visualização para esta empresa.");
@@ -240,6 +252,86 @@ export async function requireSstProviderEmployeeManageAccessOrDeny(companyId: st
   } catch (error) {
     if (error instanceof AuthError) unauthorized();
     if (error instanceof ForbiddenError || error instanceof CompanyControlReviewInProgressError) forbidden();
+    throw error;
+  }
+}
+
+// --- Sprint SST 1.4G — participantes de turma de treinamento ---
+//
+// Mesma base de `resolveSstCompanyAccessState` usada pelos guards de
+// Employee, mais duas checagens específicas de treinamento: a turma
+// precisa existir e pertencer à Company (404 se não — nunca revela outro
+// tenant), e a GESTÃO (nunca a leitura) exige que ESTA consultoria seja
+// quem gerencia o `CompanyTraining` da turma
+// (`assertProviderManagesCompanyTraining`, já usado pelas rotas de
+// turma/CompanyTraining desde antes desta sprint — reaproveitado, não
+// duplicado). Leitura é deliberadamente mais permissiva: qualquer vínculo
+// ACTIVE enxerga participantes de QUALQUER turma da empresa (inclusive
+// gerenciada por outra consultoria ou internamente), mesma política já
+// aplicada à listagem de turmas (ver lib/sst-trainings.ts) — só a ESCRITA é
+// restrita a quem gerencia aquele treinamento especificamente.
+
+async function resolveTrainingParticipantAccessLink(companyId: string, trainingClassId: string) {
+  const ctx = await resolveSstCompanyAccessState(companyId);
+
+  const trainingClass = await prisma.trainingClass.findFirst({
+    where: { id: trainingClassId, companyId },
+    select: { id: true, companyTrainingId: true },
+  });
+  if (!trainingClass) throw new NotFoundError("Turma não encontrada.");
+
+  return { ...ctx, trainingClass };
+}
+
+/** Leitura de participantes — vínculo ACTIVE + Company não SUSPENDED/CLOSED
+ * bastam (mesma política de requireSstProviderEmployeeViewAccess);
+ * CLAIM_PENDING/DISPUTED continuam legíveis. */
+export async function requireSstTrainingParticipantViewAccess(companyId: string, trainingClassId: string) {
+  return resolveTrainingParticipantAccessLink(companyId, trainingClassId);
+}
+
+/** Gestão de participantes (incluir/remover/reativar) — exige, além do
+ * necessário para leitura: papel diferente de VIEWER, accessLevel OPERATION
+ * ou ADMINISTRATION, controlStatus fora de CLAIM_PENDING/DISPUTED, E que
+ * esta consultoria seja quem gerencia o CompanyTraining desta turma
+ * (isolamento entre consultorias — nunca se opera turma gerenciada por
+ * outro prestador ou internamente, mesmo com accessLevel ADMINISTRATION). */
+export async function requireSstTrainingParticipantManageAccess(companyId: string, trainingClassId: string) {
+  const ctx = await resolveTrainingParticipantAccessLink(companyId, trainingClassId);
+  assertRoleCanWrite(ctx.sstProviderUser.role);
+  if (ctx.link.accessLevel === "VIEW") {
+    throw new ForbiddenError("Esta consultoria só tem acesso de visualização para esta empresa.");
+  }
+  if (ctx.company.controlStatus === "CLAIM_PENDING" || ctx.company.controlStatus === "DISPUTED") {
+    throw new CompanyControlReviewInProgressError();
+  }
+  await assertProviderManagesCompanyTraining(companyId, ctx.trainingClass.companyTrainingId, ctx.providerId);
+  return ctx;
+}
+
+/** Variante não-lançável — mesmo espírito de sstCanManageEmployees, para a
+ * UI decidir se mostra "Adicionar participantes"/ações de gestão. Não
+ * repete a checagem de isolamento entre consultorias (que exige uma query
+ * assíncrona) — a página já resolveu isso ao chamar o guard lançável antes
+ * de renderizar; esta variante só decide visibilidade de botão a partir do
+ * contexto já obtido. */
+export function sstCanManageTrainingParticipants(ctx: {
+  sstProviderUser: { role: SstProviderUserRole };
+  link: EmployeeAccessLink;
+  company: EmployeeAccessCompany;
+}) {
+  if (ctx.sstProviderUser.role === "VIEWER") return false;
+  if (ctx.link.accessLevel === "VIEW") return false;
+  if (ctx.company.controlStatus === "CLAIM_PENDING" || ctx.company.controlStatus === "DISPUTED") return false;
+  return true;
+}
+
+export async function requireSstTrainingParticipantViewAccessOrDeny(companyId: string, trainingClassId: string) {
+  try {
+    return await requireSstTrainingParticipantViewAccess(companyId, trainingClassId);
+  } catch (error) {
+    if (error instanceof AuthError) unauthorized();
+    if (error instanceof ForbiddenError || error instanceof NotFoundError) forbidden();
     throw error;
   }
 }

@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
 import { handleApiError, NotFoundError } from "@/lib/api-errors";
-import { addParticipants, getParticipantsForClass } from "@/lib/training-participants";
+import { enrollTrainingClassParticipants, getParticipantsForClass } from "@/lib/training-participants";
 import { trainingParticipantAddSchema } from "@/lib/validations/training-participant";
 
 type RouteParams = { params: Promise<{ id: string }> };
@@ -25,6 +25,10 @@ export async function GET(_request: Request, { params }: RouteParams) {
   }
 }
 
+// Sprint SST 1.4G — inscrição idempotente/ciente de reentrada (ver
+// lib/training-participants.ts:enrollTrainingClassParticipants). A resposta
+// inclui created/reactivated/alreadyEnrolled/totalEnrolled/remainingCapacity
+// para a UI atualizar o contador sem uma segunda chamada.
 export async function POST(request: Request, { params }: RouteParams) {
   try {
     const { user, companyId } = await requirePermission(PERMISSIONS.TRAINING_MANAGE);
@@ -37,9 +41,9 @@ export async function POST(request: Request, { params }: RouteParams) {
     const input = trainingParticipantAddSchema.parse(body);
     const employeeIds = input.employeeIds?.length ? input.employeeIds : [input.employeeId!];
 
-    const participants = await addParticipants(companyId, { id: user.id, name: user.name }, id, employeeIds);
+    const result = await enrollTrainingClassParticipants(companyId, { id: user.id, name: user.name }, id, employeeIds);
 
-    return NextResponse.json({ participants }, { status: 201 });
+    return NextResponse.json(result, { status: 201 });
   } catch (error) {
     return handleApiError(error);
   }

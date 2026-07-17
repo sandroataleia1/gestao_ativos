@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { requirePermission } from "@/lib/auth-server";
 import { PERMISSIONS } from "@/lib/permissions";
 import { handleApiError } from "@/lib/api-errors";
-import { removeParticipant, updateParticipant } from "@/lib/training-participants";
+import { cancelTrainingClassParticipant, updateParticipant } from "@/lib/training-participants";
 import { trainingParticipantUpdateSchema } from "@/lib/validations/training-participant";
 
 type RouteParams = { params: Promise<{ id: string; participantId: string }> };
@@ -24,17 +24,17 @@ export async function PUT(request: Request, { params }: RouteParams) {
   }
 }
 
-// Remoção real (não soft-delete): só é permitida quando a turma ainda nem
-// começou (SCHEDULED) — "remover" desfaz uma matrícula que nunca chegou a
-// acontecer de fato. Ver docs/trainings-domain.md.
+// Sprint SST 1.4G — remoção LÓGICA (nunca mais hard delete): só permitida
+// enquanto a turma ainda está SCHEDULED. Preserva a linha (histórico +
+// reentrada futura) — ver lib/training-participants.ts:cancelTrainingClassParticipant.
 export async function DELETE(_request: Request, { params }: RouteParams) {
   try {
     const { user, companyId } = await requirePermission(PERMISSIONS.TRAINING_MANAGE);
     const { id, participantId } = await params;
 
-    await removeParticipant(companyId, { id: user.id, name: user.name }, id, participantId);
+    const participant = await cancelTrainingClassParticipant(companyId, { id: user.id, name: user.name }, id, participantId);
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ participant });
   } catch (error) {
     return handleApiError(error);
   }
