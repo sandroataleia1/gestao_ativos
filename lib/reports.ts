@@ -297,3 +297,87 @@ export async function getExpiringCaReport(companyId: string, filters: ExpiringCa
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Treinamentos — colaboradores inscritos, resultado e vencimento
+// (Sprint SST 1.4H, fatia 3)
+// ---------------------------------------------------------------------------
+
+export type TrainingsReportFilters = {
+  companyTrainingId?: string;
+  employeeId?: string;
+  resultStatus?: "PENDING" | "APPROVED" | "FAILED";
+  dateFrom?: string;
+  dateTo?: string;
+};
+
+const TRAINING_EXPIRING_SOON_WINDOW_DAYS = 30;
+
+// Só ENROLLED entra no relatório — mesmo critério já usado por
+// getTrainingExpiryAlerts (lib/alerts.ts, Sprint SST 1.4H, fatia 1): um
+// CANCELLED (Sprint SST 1.4G) não representa uma inscrição real para fins
+// de relatório gerencial.
+export async function getTrainingsReport(companyId: string, filters: TrainingsReportFilters = {}) {
+  const { companyTrainingId, employeeId, resultStatus, dateFrom, dateTo } = filters;
+  const enrolledAtFilter = dateRangeFilter(dateFrom, dateTo);
+  const now = new Date();
+  const expiringSoonHorizon = new Date(now.getTime() + TRAINING_EXPIRING_SOON_WINDOW_DAYS * DAY_MS);
+
+  const where: Prisma.TrainingParticipantWhereInput = {
+    companyId,
+    enrollmentStatus: "ENROLLED",
+    ...(employeeId ? { employeeId } : {}),
+    ...(resultStatus ? { resultStatus } : {}),
+    ...(enrolledAtFilter ? { enrolledAt: enrolledAtFilter } : {}),
+    ...(companyTrainingId ? { trainingClass: { companyTrainingId } } : {}),
+  };
+  const expiredWhere: Prisma.TrainingParticipantWhereInput = { ...where, expiresAt: { not: null, lt: now } };
+  const expiringSoonWhere: Prisma.TrainingParticipantWhereInput = {
+    ...where,
+    expiresAt: { not: null, gte: now, lte: expiringSoonHorizon },
+  };
+
+  const [participants, total, expiredCount, expiringSoonCount, byResultRaw] = await Promise.all([
+    prisma.trainingParticipant.findMany({
+      where,
+      include: {
+        employee: { select: { name: true, document: true } },
+        trainingClass: { select: { title: true, startsAt: true, companyTraining: { select: { title: true } } } },
+      },
+      orderBy: { enrolledAt: "desc" },
+      take: REPORT_ROW_LIMIT,
+    }),
+    prisma.trainingParticipant.count({ where }),
+    prisma.trainingParticipant.count({ where: expiredWhere }),
+    prisma.trainingParticipant.count({ where: expiringSoonWhere }),
+    prisma.trainingParticipant.groupBy({ by: ["resultStatus"], where, _count: { _all: true } }),
+  ]);
+
+  const rows = participants.map((participant) => {
+    const expiresAt = participant.expiresAt;
+    return {
+      id: participant.id,
+      employeeName: participant.employee.name,
+      employeeDocument: participant.employee.document,
+      trainingTitle: participant.trainingClass.companyTraining.title,
+      classTitle: participant.trainingClass.title,
+      classStartsAt: participant.trainingClass.startsAt.toISOString(),
+      attendanceStatus: participant.attendanceStatus,
+      resultStatus: participant.resultStatus,
+      completedAt: participant.completedAt ? participant.completedAt.toISOString() : null,
+      expiresAt: expiresAt ? expiresAt.toISOString() : null,
+      expired: Boolean(expiresAt && expiresAt.getTime() < now.getTime()),
+      expiringSoon: Boolean(expiresAt && expiresAt.getTime() >= now.getTime() && expiresAt.getTime() <= expiringSoonHorizon.getTime()),
+    };
+  });
+
+  return {
+    rows,
+    summary: {
+      total,
+      expired: expiredCount,
+      expiringSoon: expiringSoonCount,
+      byResult: byResultRaw.map((row) => ({ resultStatus: row.resultStatus, count: row._count._all })),
+    },
+  };
+}

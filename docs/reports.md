@@ -2,8 +2,9 @@
 
 Visão gerencial e evidências exportáveis (CSV) sobre dados que já existem —
 este módulo não introduz nenhum model novo: é uma camada de agregação de
-leitura sobre `Asset`, `AssetUnit`/`StockBalance`, `AssetCustody` e
-`AssetCertification`.
+leitura sobre `Asset`, `AssetUnit`/`StockBalance`, `AssetCustody`,
+`AssetCertification` e (desde a Sprint SST 1.4H, fatia 3)
+`TrainingParticipant`.
 
 ## 1. Permissão
 
@@ -44,13 +45,16 @@ escreve nada.
   `dateFrom`/`dateTo` (por `deliveredAt`).
 - `GET /api/reports/expiring-ca` — filtros: `assetId`, `categoryId`,
   `withinDays` (janela de "próximo do vencimento", padrão 30).
+- `GET /api/reports/trainings` — filtros: `companyTrainingId`,
+  `employeeId`, `resultStatus` (`PENDING`/`APPROVED`/`FAILED`),
+  `dateFrom`/`dateTo` (por `enrolledAt`).
 
 Cada uma devolve `{ rows, summary }`; `lib/reports.ts` centraliza a lógica e
 é usado tanto pelas rotas quanto diretamente pela página `/reports` (Server
 Component), evitando um round-trip HTTP desnecessário no primeiro
 carregamento.
 
-## 3. Os 4 relatórios (requisito 4)
+## 3. Os 5 relatórios
 
 - **Ativos por categoria/status/condição** — lista de ativos + três
   quebras (`byCategory`/`byStatus`/`byCondition`), cada uma com contagem.
@@ -69,25 +73,32 @@ carregamento.
   atual (mesmo espírito do badge de CA em `lib/certifications/badge.ts`,
   mas por certificado individual em vez de por ativo — o relatório precisa
   listar exatamente qual CA está vencendo, não só um badge agregado).
+- **Treinamentos** (Sprint SST 1.4H, fatia 3) — participantes `ENROLLED`
+  (`CANCELLED` nunca aparece, mesmo critério de
+  `getTrainingExpiryAlerts`/`lib/alerts.ts`), com resultado, conclusão e
+  vencimento; `expired`/`expiringSoon` usam a mesma janela de 30 dias já
+  usada para CA e para o alerta de vencimento de treinamento.
 
 ## 4. Filtros (requisito 5)
 
 Nem todo filtro se aplica a todo relatório — cada aba da UI só mostra os
 campos relevantes:
 
-| Filtro | Ativos | Estoque | Custódias | CAs a vencer |
-|---|---|---|---|---|
-| Categoria | Sim | Sim | — | Sim |
-| Status/Condição | Sim | — | — | — |
-| Ativo | Sim | Sim | Sim | Sim |
-| Local | — | Sim | Sim | — |
-| Colaborador | — | — | Sim | — |
-| Período | Sim (cadastro) | — | Sim (entrega) | — |
-| Janela de vencimento | — | — | — | Sim (`withinDays`) |
+| Filtro | Ativos | Estoque | Custódias | CAs a vencer | Treinamentos |
+|---|---|---|---|---|---|
+| Categoria | Sim | Sim | — | Sim | — |
+| Status/Condição | Sim | — | — | — | — |
+| Ativo | Sim | Sim | Sim | Sim | — |
+| Local | — | Sim | Sim | — | — |
+| Colaborador | — | — | Sim | — | Sim |
+| Treinamento | — | — | — | — | Sim |
+| Resultado | — | — | — | — | Sim (`PENDING`/`APPROVED`/`FAILED`) |
+| Período | Sim (cadastro) | — | Sim (entrega) | — | Sim (inscrição) |
+| Janela de vencimento | — | — | — | Sim (`withinDays`) | Fixa em 30 dias |
 
 ## 5. UI (`/reports`)
 
-Página com abas (Ativos/Estoque/Custódias/CAs a vencer) — a aba ativa e
+Página com abas (Ativos/Estoque/Custódias/CAs a vencer/Treinamentos) — a aba ativa e
 todos os filtros vivem na **query string** (`?tab=custodies&employeeId=...`),
 não em estado local: a página é um Server Component que lê `searchParams`
 e busca os dados já filtrados no servidor. Trocar de filtro ou de aba

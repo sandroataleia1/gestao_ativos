@@ -36,6 +36,7 @@ import type {
   ReportLookups,
   ReportTab,
   StockReportData,
+  TrainingsReportData,
 } from "./types";
 
 const ALL_VALUE = "all";
@@ -45,6 +46,13 @@ const TAB_LABEL: Record<ReportTab, string> = {
   stock: "Estoque",
   custodies: "Custódias",
   ca: "CAs a vencer",
+  training: "Treinamentos",
+};
+
+const RESULT_STATUS_LABEL: Record<string, string> = {
+  PENDING: "Pendente",
+  APPROVED: "Aprovado",
+  FAILED: "Reprovado",
 };
 
 function formatDate(value: string | null) {
@@ -60,7 +68,7 @@ export function ReportsView({
 }: {
   tab: ReportTab;
   filters: ReportFilters;
-  report: AssetsReportData | StockReportData | CustodiesReportData | ExpiringCaReportData;
+  report: AssetsReportData | StockReportData | CustodiesReportData | ExpiringCaReportData | TrainingsReportData;
   lookups: ReportLookups;
 }) {
   const router = useRouter();
@@ -102,6 +110,7 @@ export function ReportsView({
       {tab === "stock" ? <StockReportView report={report as StockReportData} /> : null}
       {tab === "custodies" ? <CustodiesReportView report={report as CustodiesReportData} /> : null}
       {tab === "ca" ? <ExpiringCaReportView report={report as ExpiringCaReportData} /> : null}
+      {tab === "training" ? <TrainingsReportView report={report as TrainingsReportData} /> : null}
     </div>
   );
 }
@@ -262,55 +271,106 @@ function FiltersBar({
         </div>
       ) : null}
 
+      {tab === "custodies" || tab === "training" ? (
+        <div className="grid gap-1.5">
+          <Label className="text-xs">Colaborador</Label>
+          <Select
+            items={{
+              [ALL_VALUE]: "Todos",
+              ...Object.fromEntries(lookups.employees.map((e) => [e.id, e.name])),
+            }}
+            value={filters.employeeId ?? ALL_VALUE}
+            onValueChange={(value) => onChange({ employeeId: (value as string) ?? undefined })}
+          >
+            <SelectTrigger size="sm" className="w-40">
+              <SelectValue placeholder="Colaborador" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_VALUE}>Todos</SelectItem>
+              {lookups.employees.map((employee) => (
+                <SelectItem key={employee.id} value={employee.id}>
+                  {employee.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ) : null}
+
       {tab === "custodies" ? (
+        <div className="grid gap-1.5">
+          <Label className="text-xs">Status</Label>
+          <Select
+            items={{ [ALL_VALUE]: "Todos", ACTIVE: "Ativa", RETURNED: "Devolvida" }}
+            value={filters.status ?? ALL_VALUE}
+            onValueChange={(value) => onChange({ status: (value as string) ?? undefined })}
+          >
+            <SelectTrigger size="sm" className="w-36">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_VALUE}>Todos</SelectItem>
+              <SelectItem value="ACTIVE">Ativa</SelectItem>
+              <SelectItem value="RETURNED">Devolvida</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      ) : null}
+
+      {tab === "training" ? (
         <>
           <div className="grid gap-1.5">
-            <Label className="text-xs">Colaborador</Label>
+            <Label className="text-xs">Treinamento</Label>
             <Select
               items={{
                 [ALL_VALUE]: "Todos",
-                ...Object.fromEntries(lookups.employees.map((e) => [e.id, e.name])),
+                ...Object.fromEntries(lookups.companyTrainings.map((t) => [t.id, t.name])),
               }}
-              value={filters.employeeId ?? ALL_VALUE}
-              onValueChange={(value) => onChange({ employeeId: (value as string) ?? undefined })}
+              value={filters.companyTrainingId ?? ALL_VALUE}
+              onValueChange={(value) => onChange({ companyTrainingId: (value as string) ?? undefined })}
             >
-              <SelectTrigger size="sm" className="w-40">
-                <SelectValue placeholder="Colaborador" />
+              <SelectTrigger size="sm" className="w-48">
+                <SelectValue placeholder="Treinamento" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL_VALUE}>Todos</SelectItem>
-                {lookups.employees.map((employee) => (
-                  <SelectItem key={employee.id} value={employee.id}>
-                    {employee.name}
+                {lookups.companyTrainings.map((training) => (
+                  <SelectItem key={training.id} value={training.id}>
+                    {training.name}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
           <div className="grid gap-1.5">
-            <Label className="text-xs">Status</Label>
+            <Label className="text-xs">Resultado</Label>
             <Select
-              items={{ [ALL_VALUE]: "Todos", ACTIVE: "Ativa", RETURNED: "Devolvida" }}
-              value={filters.status ?? ALL_VALUE}
-              onValueChange={(value) => onChange({ status: (value as string) ?? undefined })}
+              items={{ [ALL_VALUE]: "Todos", ...RESULT_STATUS_LABEL }}
+              value={filters.resultStatus ?? ALL_VALUE}
+              onValueChange={(value) => onChange({ resultStatus: (value as string) ?? undefined })}
             >
               <SelectTrigger size="sm" className="w-36">
-                <SelectValue placeholder="Status" />
+                <SelectValue placeholder="Resultado" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL_VALUE}>Todos</SelectItem>
-                <SelectItem value="ACTIVE">Ativa</SelectItem>
-                <SelectItem value="RETURNED">Devolvida</SelectItem>
+                {Object.entries(RESULT_STATUS_LABEL).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
         </>
       ) : null}
 
-      {tab === "assets" || tab === "custodies" ? (
+      {tab === "assets" || tab === "custodies" || tab === "training" ? (
         <form onSubmit={applyDates} className="flex flex-wrap items-end gap-3">
           <div className="grid gap-1.5">
-            <Label className="text-xs">{tab === "assets" ? "Cadastrado de" : "Entregue de"}</Label>
+            <Label className="text-xs">
+              {tab === "assets" ? "Cadastrado de" : tab === "training" ? "Inscrito de" : "Entregue de"}
+            </Label>
             <Input
               type="date"
               value={dateFrom}
@@ -655,6 +715,82 @@ function ExpiringCaReportView({ report }: { report: ExpiringCaReportData }) {
               <Badge variant={row.bucket === "EXPIRED" ? "destructive" : "outline"}>
                 {row.bucket === "EXPIRED" ? "Vencido" : "Próximo do vencimento"}
               </Badge>
+            </TableCell>
+          </TableRow>
+        )}
+      />
+    </div>
+  );
+}
+
+function TrainingsReportView({ report }: { report: TrainingsReportData }) {
+  function exportCsv() {
+    downloadCsv(
+      "relatorio-treinamentos.csv",
+      report.rows.map((row) => ({
+        Colaborador: row.employeeName,
+        Documento: row.employeeDocument,
+        Treinamento: row.trainingTitle,
+        Turma: row.classTitle,
+        "Início da turma": formatDate(row.classStartsAt),
+        Resultado: RESULT_STATUS_LABEL[row.resultStatus] ?? row.resultStatus,
+        Conclusão: formatDate(row.completedAt),
+        Vencimento: formatDate(row.expiresAt),
+        Situação: row.expired ? "Vencido" : row.expiringSoon ? "Vence em breve" : "—",
+      })),
+    );
+  }
+
+  return (
+    <div className="grid gap-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <SummaryCard label="Total no filtro" value={report.summary.total} />
+        <SummaryCard label="Vencidos" value={report.summary.expired} />
+        <SummaryCard label="Vencendo em breve" value={report.summary.expiringSoon} />
+        <SummaryCard
+          label="Aprovados"
+          value={report.summary.byResult.find((r) => r.resultStatus === "APPROVED")?.count ?? 0}
+        />
+      </div>
+
+      <BreakdownCard
+        title="Por resultado"
+        items={report.summary.byResult.map((row) => ({
+          label: RESULT_STATUS_LABEL[row.resultStatus] ?? row.resultStatus,
+          count: row.count,
+        }))}
+      />
+
+      <ReportTable
+        title="Treinamentos"
+        onExport={exportCsv}
+        headers={["Colaborador", "Treinamento", "Turma", "Resultado", "Conclusão", "Vencimento"]}
+        rows={report.rows}
+        renderRow={(row) => (
+          <TableRow key={row.id}>
+            <TableCell>{row.employeeName}</TableCell>
+            <TableCell>{row.trainingTitle}</TableCell>
+            <TableCell>{row.classTitle}</TableCell>
+            <TableCell>
+              <Badge
+                variant={
+                  row.resultStatus === "APPROVED" ? "default" : row.resultStatus === "FAILED" ? "destructive" : "outline"
+                }
+              >
+                {RESULT_STATUS_LABEL[row.resultStatus] ?? row.resultStatus}
+              </Badge>
+            </TableCell>
+            <TableCell>{formatDate(row.completedAt)}</TableCell>
+            <TableCell>
+              {row.expiresAt ? (
+                <span className="flex items-center gap-1.5">
+                  {formatDate(row.expiresAt)}
+                  {row.expired ? <Badge variant="destructive">Vencido</Badge> : null}
+                  {row.expiringSoon ? <Badge variant="outline">Vence em breve</Badge> : null}
+                </span>
+              ) : (
+                "—"
+              )}
             </TableCell>
           </TableRow>
         )}

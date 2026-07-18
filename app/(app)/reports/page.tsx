@@ -8,6 +8,7 @@ import {
   getCustodiesReport,
   getExpiringCaReport,
   getStockReport,
+  getTrainingsReport,
 } from "@/lib/reports";
 import { getCachedReportLookups } from "@/lib/cache";
 import { ReportsView } from "./reports-view";
@@ -17,7 +18,7 @@ export const metadata: Metadata = {
   title: "Relatórios — Gestão de Ativos",
 };
 
-const VALID_TABS: ReportTab[] = ["assets", "stock", "custodies", "ca"];
+const VALID_TABS: ReportTab[] = ["assets", "stock", "custodies", "ca", "training"];
 
 export default async function ReportsPage({
   searchParams,
@@ -45,9 +46,11 @@ export default async function ReportsPage({
     dateFrom: get("dateFrom"),
     dateTo: get("dateTo"),
     withinDays: get("withinDays"),
+    companyTrainingId: get("companyTrainingId"),
+    resultStatus: get("resultStatus"),
   };
 
-  const [{ categories, statuses, conditions, locations }, employees, assets] = await Promise.all([
+  const [{ categories, statuses, conditions, locations }, employees, assets, companyTrainings] = await Promise.all([
     getCachedReportLookups(companyId),
     prisma.employee.findMany({
       where: { companyId, status: "ACTIVE" },
@@ -59,9 +62,18 @@ export default async function ReportsPage({
       select: { id: true, name: true, assetCode: true },
       orderBy: { name: "asc" },
     }),
+    prisma.companyTraining.findMany({
+      where: { companyId, active: true },
+      select: { id: true, title: true },
+      orderBy: { title: "asc" },
+    }),
   ]);
 
   const withinDays = filters.withinDays ? Number(filters.withinDays) : undefined;
+  const resultStatus =
+    filters.resultStatus === "PENDING" || filters.resultStatus === "APPROVED" || filters.resultStatus === "FAILED"
+      ? filters.resultStatus
+      : undefined;
 
   const report =
     tab === "assets"
@@ -76,10 +88,12 @@ export default async function ReportsPage({
                   ? filters.status
                   : undefined,
             })
-          : await getExpiringCaReport(companyId, {
-              ...filters,
-              withinDays: withinDays && !Number.isNaN(withinDays) && withinDays > 0 ? withinDays : undefined,
-            });
+          : tab === "ca"
+            ? await getExpiringCaReport(companyId, {
+                ...filters,
+                withinDays: withinDays && !Number.isNaN(withinDays) && withinDays > 0 ? withinDays : undefined,
+              })
+            : await getTrainingsReport(companyId, { ...filters, resultStatus });
 
   return (
     <div className="grid gap-6">
@@ -94,7 +108,7 @@ export default async function ReportsPage({
         tab={tab}
         filters={filters}
         report={report}
-        lookups={{ categories, statuses, conditions, locations, employees, assets }}
+        lookups={{ categories, statuses, conditions, locations, employees, assets, companyTrainings: companyTrainings.map((t) => ({ id: t.id, name: t.title })) }}
       />
     </div>
   );

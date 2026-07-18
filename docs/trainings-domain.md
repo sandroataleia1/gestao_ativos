@@ -35,9 +35,12 @@ Documento cumulativo do módulo de Treinamentos, atualizado a cada sprint.
   presença assinada (`TrainingClassDocument`/`TrainingClassSignature`) — só
   Portal Empresa, só HTML (sem PDF), sem assinatura remota. Detalhado em
   `docs/training-documents.md`.
+- **Sprint SST 1.4H, fatia 3** entregou o relatório de treinamento
+  (`getTrainingsReport`, ver `docs/reports.md`) — 5ª aba de `/reports`,
+  mesmo padrão dos 4 relatórios já existentes, nenhum model novo.
 
-Relatórios de treinamento, geração de PDF, assinatura remota e as telas
-equivalentes no Portal Consultoria continuam trabalho futuro — ver seções 9
+Geração de PDF, assinatura remota e as telas equivalentes no Portal
+Consultoria continuam trabalho futuro — ver seções 9
 e 10 e `docs/portal-consultoria.md` (seção "Roadmap"). Relacionado:
 `docs/auth-rbac.md` (RBAC), `docs/alerts.md`, `docs/reports.md`,
 `docs/sst-providers.md`, `docs/training-architecture.md` (padrões que este
@@ -282,7 +285,6 @@ a propriedade (continua sempre da empresa). Detalhado em
   geração de PDF, sem assinatura remota (WhatsApp/token público) e só no
   Portal Empresa (nenhum equivalente no Portal Consultoria SST ainda). Ver
   `docs/training-documents.md`.
-- Sem relatórios de treinamento.
 - Sem `/sst` (Portal SST externo).
 - Sem agenda (calendário) — `TrainingClass` guarda data/hora, mas não há
   visão de calendário na UI, só a lista com painel resumo.
@@ -310,6 +312,11 @@ presença assinada (`lib/training-documents.ts`,
 `docs/training-documents.md`) — mesmo padrão de
 `CustodyDocument`/`CustodySignature` (`docs/custody-documents.md`), só
 Portal Empresa, só HTML.
+
+**Entregue (Sprint SST 1.4H, fatia 3)**: relatório de treinamento
+(`getTrainingsReport`, `lib/reports.ts`) — 5ª aba de `/reports`, mesmo
+padrão dos 4 relatórios já existentes (`{ rows, summary }`, filtros na
+query string, export CSV client-side).
 
 **Pendente**: geração de PDF (`pdfUrl` já preparado, nunca preenchido);
 assinatura remota (WhatsApp/token público, mesmo padrão de
