@@ -64,6 +64,11 @@ export type AuditAction =
   | "training_participant.reactivate"
   | "training_participant.attendance_update"
   | "training_participant.result_update"
+  // Sprint SST 1.4H, fatia 2 — geração de documento (lista de presença/
+  // certificado) e assinatura de lista de presença. Ver lib/training-documents.ts.
+  | "training_class_document.generate_attendance_list"
+  | "training_class_document.generate_certificate"
+  | "training_class_document.sign"
   | "sst_provider.create"
   | "sst_provider.approve"
   | "sst_provider.suspend"

@@ -183,6 +183,8 @@ model Company {
   sstProviderLinks    SstProviderCompany[]
   custodyDocuments    CustodyDocument[]
   custodySignatures   CustodySignature[]
+  trainingClassDocuments  TrainingClassDocument[]
+  trainingClassSignatures TrainingClassSignature[]
   custodyPhotos       CustodyPhoto[]
   custodySignatureRequests CustodySignatureRequest[]
   auditLogs                AuditLog[]
@@ -1422,6 +1424,7 @@ model TrainingClass {
   updatedAt           DateTime            @updatedAt
 
   participants TrainingParticipant[]
+  documents    TrainingClassDocument[]
 
   @@index([companyId])
   @@index([companyTrainingId])
@@ -1508,6 +1511,74 @@ model TrainingParticipant {
   // sistema (nunca uma varredura global). A futura sprint de alertas filtra
   // exatamente por esses dois campos juntos. Ver docs/training-architecture.md.
   @@index([companyId, expiresAt])
+
+  documents  TrainingClassDocument[]
+  signatures TrainingClassSignature[]
+}
+
+// ---------------------------------------------------------------------------
+// Documentos de turma — Sprint SST 1.4H, fatia 2 (ver
+// docs/training-documents.md). Espelha CustodyDocument/CustodySignature
+// (docs/custody-documents.md): lista de presença é 1 documento por turma
+// com várias assinaturas (uma por participante); certificado é 1 documento
+// por participante, sem assinatura (é emitido, não atestado pelo próprio
+// colaborador). Só HTML nesta fatia — pdfUrl fica preparado, nunca
+// preenchido (mesmo padrão de CustodyDocument).
+// ---------------------------------------------------------------------------
+
+enum TrainingClassDocumentType {
+  ATTENDANCE_LIST
+  CERTIFICATE
+}
+
+model TrainingClassDocument {
+  id              String                    @id @default(cuid())
+  companyId       String
+  company         Company                   @relation(fields: [companyId], references: [id])
+  trainingClassId String
+  trainingClass   TrainingClass             @relation(fields: [trainingClassId], references: [id])
+  type            TrainingClassDocumentType
+  // Obrigatório para CERTIFICATE (documento individual); sempre null para
+  // ATTENDANCE_LIST (documento único da turma, cobre todos os inscritos no
+  // momento da geração). Ver CHECK manual na migration.
+  participantId   String?
+  participant     TrainingParticipant?      @relation(fields: [participantId], references: [id])
+  contentHtml     String
+  pdfUrl          String?
+  generatedAt     DateTime
+  createdAt       DateTime                  @default(now())
+
+  signatures TrainingClassSignature[]
+
+  @@index([companyId])
+  @@index([trainingClassId])
+  @@index([participantId])
+}
+
+// Uma assinatura sempre pertence a UM participante confirmando a própria
+// presença (diferente de CustodySignature, onde qualquer papel pode assinar
+// o mesmo termo) — por isso participantId é obrigatório e único por
+// documento: reassinatura não é suportada nesta fatia.
+model TrainingClassSignature {
+  id                String                @id @default(cuid())
+  companyId         String
+  company           Company               @relation(fields: [companyId], references: [id])
+  documentId        String
+  document          TrainingClassDocument @relation(fields: [documentId], references: [id])
+  participantId     String
+  participant       TrainingParticipant   @relation(fields: [participantId], references: [id])
+  signerName        String
+  signerDocument    String
+  signatureImageUrl String?
+  signatureData     String?
+  signedAt          DateTime
+  ipAddress         String?
+  userAgent         String?
+  createdAt         DateTime              @default(now())
+
+  @@unique([documentId, participantId])
+  @@index([companyId])
+  @@index([documentId])
 }
 
 // ---------------------------------------------------------------------------

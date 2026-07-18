@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2Icon, MoreHorizontalIcon, PlusIcon } from "lucide-react";
+import { FileTextIcon, Loader2Icon, MoreHorizontalIcon, PlusIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -49,6 +49,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { AddParticipantsDialog } from "./add-participants-dialog";
+import { TrainingDocumentsDialog } from "./training-documents-dialog";
 import type { ParticipantRow } from "./types";
 
 const ATTENDANCE_LABELS: Record<string, string> = {
@@ -78,15 +79,20 @@ export function ParticipantsTable({
   maximumParticipants,
   initialParticipants,
   canManage,
+  requiresAttendanceList,
+  requiresCertificate,
 }: {
   trainingClassId: string;
   trainingClassStatus: string;
   maximumParticipants: number | null;
   initialParticipants: ParticipantRow[];
   canManage: boolean;
+  requiresAttendanceList: boolean;
+  requiresCertificate: boolean;
 }) {
   const router = useRouter();
   const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [documentsDialogOpen, setDocumentsDialogOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<ParticipantRow | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
   const [notesTarget, setNotesTarget] = useState<ParticipantRow | null>(null);
@@ -168,6 +174,26 @@ export function ParticipantsTable({
     }
   }
 
+  async function handleGenerateCertificate(participant: ParticipantRow) {
+    setPendingParticipantId(participant.id);
+    try {
+      const response = await fetch(`/api/training-classes/${trainingClassId}/documents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "CERTIFICATE", participantId: participant.id }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error ?? "Não foi possível gerar o certificado.");
+      }
+      toast.success("Certificado gerado. Veja em \"Documentos\".");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Erro inesperado.");
+    } finally {
+      setPendingParticipantId(null);
+    }
+  }
+
   async function handleSaveNotes() {
     if (!notesTarget) return;
     setIsSavingNotes(true);
@@ -183,12 +209,18 @@ export function ParticipantsTable({
     <div className="grid gap-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-medium">Participantes</h2>
-        {canAdd ? (
-          <Button onClick={() => setAddDialogOpen(true)}>
-            <PlusIcon />
-            Adicionar participantes
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setDocumentsDialogOpen(true)}>
+            <FileTextIcon />
+            Documentos
           </Button>
-        ) : null}
+          {canAdd ? (
+            <Button onClick={() => setAddDialogOpen(true)}>
+              <PlusIcon />
+              Adicionar participantes
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       <div className="rounded-xl border bg-card">
@@ -346,6 +378,14 @@ export function ParticipantsTable({
                                   >
                                     Editar observação
                                   </DropdownMenuItem>
+                                  {requiresCertificate ? (
+                                    <DropdownMenuItem
+                                      disabled={participant.resultStatus !== "APPROVED"}
+                                      onClick={() => handleGenerateCertificate(participant)}
+                                    >
+                                      Gerar certificado
+                                    </DropdownMenuItem>
+                                  ) : null}
                                   <DropdownMenuItem
                                     variant="destructive"
                                     disabled={!canRemove}
@@ -389,6 +429,23 @@ export function ParticipantsTable({
         maximumParticipants={maximumParticipants}
         currentParticipantCount={activeParticipants.length}
         onAdded={() => router.refresh()}
+      />
+
+      <TrainingDocumentsDialog
+        open={documentsDialogOpen}
+        onOpenChange={setDocumentsDialogOpen}
+        trainingClassId={trainingClassId}
+        requiresAttendanceList={requiresAttendanceList}
+        canGenerateAttendanceList={canRecord}
+        canManage={canManage}
+        enrolledParticipants={activeParticipants.map((participant) => ({
+          id: participant.id,
+          employee: {
+            name: participant.employee.name,
+            document: participant.employee.document,
+            registration: participant.employee.registration,
+          },
+        }))}
       />
 
       <Dialog open={Boolean(notesTarget)} onOpenChange={(open) => !open && setNotesTarget(null)}>

@@ -44,7 +44,11 @@ export default async function TrainingClassDetailPage({
   const [trainingClass, participants] = await Promise.all([
     prisma.trainingClass.findFirst({
       where: { id, companyId },
-      include: { companyTraining: { select: { id: true, title: true, validityMonths: true } } },
+      include: {
+        companyTraining: {
+          select: { id: true, title: true, validityMonths: true, requiresAttendanceList: true, requiresCertificate: true },
+        },
+      },
     }),
     getParticipantsForClass(companyId, id),
   ]);
@@ -105,6 +109,8 @@ export default async function TrainingClassDetailPage({
         maximumParticipants={trainingClass.maximumParticipants}
         initialParticipants={participants}
         canManage={canManage}
+        requiresAttendanceList={trainingClass.companyTraining.requiresAttendanceList}
+        requiresCertificate={trainingClass.companyTraining.requiresCertificate}
       />
     </div>
   );

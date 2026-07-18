@@ -4,6 +4,7 @@ import { ValidationError } from "@/lib/api-errors";
 import { getStockRows, toNumber } from "@/lib/stock";
 import { formatDateOnlyBR } from "@/lib/date-only";
 import { generateQrToken } from "@/lib/qr-code";
+import { escapeHtml } from "@/lib/html-escape";
 
 // Funções puras (client-safe) ficam em ./badge — reexportadas aqui para
 // quem importa o barrel `@/lib/custodies` a partir de código server (rotas
@@ -200,15 +201,6 @@ export async function getCustodyIndicators(companyId: string) {
 // ---------------------------------------------------------------------------
 // Documentos e assinatura digital (termo de responsabilidade).
 // ---------------------------------------------------------------------------
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
 
 function formatTermDate(value: Date | null) {
   if (!value) return "—";

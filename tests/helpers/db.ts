@@ -89,6 +89,9 @@ export async function createTestCompanyTraining(
   overrides?: Partial<{
     managementMode: "INTERNAL" | "EXTERNAL_PROVIDER";
     managedByProviderId: string | null;
+    requiresCertificate: boolean;
+    requiresAttendanceList: boolean;
+    workloadHours: number | null;
   }>,
   label = "training",
 ) {
@@ -99,6 +102,9 @@ export async function createTestCompanyTraining(
       trainingType: "LEGAL",
       managementMode: overrides?.managementMode ?? "INTERNAL",
       managedByProviderId: overrides?.managedByProviderId ?? null,
+      requiresCertificate: overrides?.requiresCertificate ?? true,
+      requiresAttendanceList: overrides?.requiresAttendanceList ?? true,
+      workloadHours: overrides?.workloadHours,
     },
   });
 }
@@ -298,6 +304,12 @@ export async function cleanupFixtures(params: {
     await prisma.location.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.locationType.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.movementType.deleteMany({ where: { companyId: { in: companyIds } } });
+    // TrainingClassSignature/TrainingClassDocument.companyId usam
+    // onDelete: Restrict — referenciam TrainingParticipant/TrainingClass
+    // também (Restrict), então precisam sair antes deles (Sprint SST 1.4H,
+    // fatia 2 — primeiro teste a criar estas fixtures diretamente).
+    await prisma.trainingClassSignature.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.trainingClassDocument.deleteMany({ where: { companyId: { in: companyIds } } });
     // TrainingParticipant/TrainingClass/CompanyTraining.companyId usam
     // onDelete: Restrict — TrainingParticipant referencia Employee e
     // TrainingClass também, então precisam sair antes do

@@ -28,11 +28,17 @@ Documento cumulativo do módulo de Treinamentos, atualizado a cada sprint.
   contra redução abaixo do número de inscritos, e a porta de "adicionar"
   foi restrita a `SCHEDULED` (antes também permitia `IN_PROGRESS`). Ver
   seção 7.1.
+- **Sprint SST 1.4H, fatia 1** entregou alertas de vencimento de
+  treinamento (`getTrainingExpiryAlerts`, ver `docs/alerts.md`) — só Portal
+  Empresa.
+- **Sprint SST 1.4H, fatia 2** entregou certificado individual e lista de
+  presença assinada (`TrainingClassDocument`/`TrainingClassSignature`) — só
+  Portal Empresa, só HTML (sem PDF), sem assinatura remota. Detalhado em
+  `docs/training-documents.md`.
 
-Certificados, alertas de vencimento/reciclagem, relatórios e as demais
-telas do Portal Consultoria (treinamentos/turmas/participantes dentro do
-portal) continuam trabalho futuro — ver seções 9 e 10 e
-`docs/portal-consultoria.md` (seção "Roadmap"). Relacionado:
+Relatórios de treinamento, geração de PDF, assinatura remota e as telas
+equivalentes no Portal Consultoria continuam trabalho futuro — ver seções 9
+e 10 e `docs/portal-consultoria.md` (seção "Roadmap"). Relacionado:
 `docs/auth-rbac.md` (RBAC), `docs/alerts.md`, `docs/reports.md`,
 `docs/sst-providers.md`, `docs/training-architecture.md` (padrões que este
 módulo vai reaproveitar mais adiante) e `docs/portal-consultoria.md` (Portal
@@ -272,10 +278,10 @@ a propriedade (continua sempre da empresa). Detalhado em
 
 ## 9. Limitações atuais
 
-- Sem `TrainingCertificate` (certificados) ou `TrainingDocument`
-  (anexos/lista de presença assinada) — `CompanyTraining` já tem os campos
-  `requiresCertificate`/`requiresAttendanceList`/`requiresSignature`
-  modelados desde a Sprint 0, mas nenhum código ainda os usa.
+- Certificado e lista de presença assinada existem só como HTML — sem
+  geração de PDF, sem assinatura remota (WhatsApp/token público) e só no
+  Portal Empresa (nenhum equivalente no Portal Consultoria SST ainda). Ver
+  `docs/training-documents.md`.
 - Sem relatórios de treinamento.
 - Sem `/sst` (Portal SST externo).
 - Sem agenda (calendário) — `TrainingClass` guarda data/hora, mas não há
@@ -289,10 +295,8 @@ a propriedade (continua sempre da empresa). Detalhado em
   participantes).
 - `TrainingTemplate` é somente leitura via API — toda manutenção do
   catálogo inicial é via seed/banco, sem UI.
-- Certificado, assinatura de lista de presença, evidências e avaliação/nota
-  continuam fora de escopo — ver seção 10 ("Sprint SST 1.4H", fatias 2/3).
-  Presença/resultado/vencimento (as fatias já entregues) não estão mais
-  aqui.
+- Evidências e avaliação/nota (`minimumPassingGrade`/`requiresExam`)
+  continuam fora de escopo — nenhum código ainda os usa.
 
 ## 10. Próximos passos
 
@@ -301,12 +305,15 @@ a propriedade (continua sempre da empresa). Detalhado em
 e segue o mesmo padrão "calculado sob demanda, sem tabela própria" já usado
 para CA/custódia/estoque (ver `docs/alerts.md`).
 
-**Pendente**: certificados (`TrainingCertificate`, possivelmente
-reaproveitando o padrão de `dataUrl` já usado em `CustodyPhoto`/
-`CustodySignature` para anexos sem storage externo) e lista de presença
-assinada (mesmo padrão de `CustodyDocument`/`CustodySignature`, ver
-`docs/custody-documents.md` — `CompanyTraining.requiresCertificate`/
-`requiresAttendanceList`/`requiresSignature` já existem desde a Sprint 0
-para isso); relatórios de treinamento (reaproveitando os padrões de
-`lib/reports.ts`); e, por fim, o Portal Consultoria externo (login/telas
+**Entregue (Sprint SST 1.4H, fatia 2)**: certificado individual e lista de
+presença assinada (`lib/training-documents.ts`,
+`docs/training-documents.md`) — mesmo padrão de
+`CustodyDocument`/`CustodySignature` (`docs/custody-documents.md`), só
+Portal Empresa, só HTML.
+
+**Pendente**: geração de PDF (`pdfUrl` já preparado, nunca preenchido);
+assinatura remota (WhatsApp/token público, mesmo padrão de
+`CustodySignatureRequest`/`app/assinar/[token]`); os mesmos dois documentos
+no Portal Consultoria SST; relatórios de treinamento (reaproveitando os
+padrões de `lib/reports.ts`); e, por fim, o Portal Consultoria externo (login/telas
 próprias para o prestador — ver `docs/sst-providers.md`, seção 6).
