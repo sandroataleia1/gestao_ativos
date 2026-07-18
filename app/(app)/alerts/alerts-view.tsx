@@ -35,11 +35,14 @@ const TYPE_LABEL: Record<AlertType, string> = {
   CA_EXPIRING_SOON: "CA a vencer",
   CUSTODY_OVERDUE: "Devolução atrasada",
   LOW_STOCK: "Estoque baixo",
+  TRAINING_EXPIRED: "Treinamento vencido",
+  TRAINING_EXPIRING_SOON: "Treinamento a vencer",
 };
 
 const RESOURCE_HREF: Record<AlertResourceType, string> = {
   ASSET: "/assets",
   CUSTODY: "/custodies",
+  TRAINING: "/trainings/classes",
 };
 
 function formatDateTime(value: string) {

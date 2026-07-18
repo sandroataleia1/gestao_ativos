@@ -25,9 +25,11 @@ const CATEGORY_BY_TYPE: Record<AlertType, { label: string; href: string; filterK
   CA_EXPIRING_SOON: { label: "Certificações", href: "/reports", filterKey: "certifications" },
   CUSTODY_OVERDUE: { label: "Entregas", href: "/custodies", filterKey: "custody" },
   LOW_STOCK: { label: "Estoque", href: "/stock", filterKey: "stock" },
+  TRAINING_EXPIRED: { label: "Treinamentos", href: "/trainings/classes", filterKey: "training" },
+  TRAINING_EXPIRING_SOON: { label: "Treinamentos", href: "/trainings/classes", filterKey: "training" },
 };
 
-type FilterKey = "all" | "critical" | "custody" | "stock" | "certifications";
+type FilterKey = "all" | "critical" | "custody" | "stock" | "certifications" | "training";
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "all", label: "Todas" },
@@ -35,6 +37,7 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "custody", label: "Entregas" },
   { key: "stock", label: "Estoque" },
   { key: "certifications", label: "Certificações" },
+  { key: "training", label: "Treinamentos" },
 ];
 
 function matchesFilter(alert: Alert, filter: FilterKey): boolean {

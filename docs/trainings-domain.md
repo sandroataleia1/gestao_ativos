@@ -273,10 +273,9 @@ a propriedade (continua sempre da empresa). Detalhado em
 ## 9. Limitações atuais
 
 - Sem `TrainingCertificate` (certificados) ou `TrainingDocument`
-  (anexos/lista de presença assinada).
-- Sem alertas de vencimento/reciclagem — `TrainingParticipant.expiresAt`
-  agora existe e é calculado, mas ainda não há nada lendo esse campo para
-  gerar alerta (o dado está pronto para isso, ver seção 10).
+  (anexos/lista de presença assinada) — `CompanyTraining` já tem os campos
+  `requiresCertificate`/`requiresAttendanceList`/`requiresSignature`
+  modelados desde a Sprint 0, mas nenhum código ainda os usa.
 - Sem relatórios de treinamento.
 - Sem `/sst` (Portal SST externo).
 - Sem agenda (calendário) — `TrainingClass` guarda data/hora, mas não há
@@ -290,19 +289,24 @@ a propriedade (continua sempre da empresa). Detalhado em
   participantes).
 - `TrainingTemplate` é somente leitura via API — toda manutenção do
   catálogo inicial é via seed/banco, sem UI.
-- Presença, ausência, justificativa, resultado, conclusão, certificado,
-  assinatura de lista de presença, evidências, avaliação/nota, validade/
-  renovação e alertas de vencimento continuam fora do escopo de inscrição
-  entregue na Sprint SST 1.4G — ver Sprint SST 1.4H.
+- Certificado, assinatura de lista de presença, evidências e avaliação/nota
+  continuam fora de escopo — ver seção 10 ("Sprint SST 1.4H", fatias 2/3).
+  Presença/resultado/vencimento (as fatias já entregues) não estão mais
+  aqui.
 
 ## 10. Próximos passos
 
-Certificados (`TrainingCertificate`, possivelmente reaproveitando o padrão
-de `dataUrl` já usado em `CustodyPhoto`/`CustodySignature` para anexos sem
-storage externo) e lista de presença assinada; alertas de vencimento/
-reciclagem (reaproveitando o padrão "calculado sob demanda, sem tabela
-própria" já usado em `lib/alerts.ts` — ver `docs/alerts.md` — agora com
-`TrainingParticipant.expiresAt` como fonte real de "quando um colaborador
-precisa reciclar"); relatórios de treinamento (reaproveitando os padrões de
+**Entregue (Sprint SST 1.4H, fatia 1)**: alertas de vencimento/reciclagem —
+`getTrainingExpiryAlerts` (`lib/alerts.ts`) lê `TrainingParticipant.expiresAt`
+e segue o mesmo padrão "calculado sob demanda, sem tabela própria" já usado
+para CA/custódia/estoque (ver `docs/alerts.md`).
+
+**Pendente**: certificados (`TrainingCertificate`, possivelmente
+reaproveitando o padrão de `dataUrl` já usado em `CustodyPhoto`/
+`CustodySignature` para anexos sem storage externo) e lista de presença
+assinada (mesmo padrão de `CustodyDocument`/`CustodySignature`, ver
+`docs/custody-documents.md` — `CompanyTraining.requiresCertificate`/
+`requiresAttendanceList`/`requiresSignature` já existem desde a Sprint 0
+para isso); relatórios de treinamento (reaproveitando os padrões de
 `lib/reports.ts`); e, por fim, o Portal Consultoria externo (login/telas
 próprias para o prestador — ver `docs/sst-providers.md`, seção 6).

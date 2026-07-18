@@ -9,8 +9,14 @@ import { formatDateOnlyBR } from "@/lib/date-only";
 // existe tabela de alertas.
 
 export type AlertSeverity = "INFO" | "WARNING" | "CRITICAL";
-export type AlertType = "CA_EXPIRED" | "CA_EXPIRING_SOON" | "CUSTODY_OVERDUE" | "LOW_STOCK";
-export type AlertResourceType = "ASSET" | "CUSTODY";
+export type AlertType =
+  | "CA_EXPIRED"
+  | "CA_EXPIRING_SOON"
+  | "CUSTODY_OVERDUE"
+  | "LOW_STOCK"
+  | "TRAINING_EXPIRED"
+  | "TRAINING_EXPIRING_SOON";
+export type AlertResourceType = "ASSET" | "CUSTODY" | "TRAINING";
 
 export type Alert = {
   id: string;
@@ -130,6 +136,49 @@ export async function getLowStockAlerts(companyId: string, now: Date): Promise<A
   return alerts;
 }
 
+// Requisito: treinamento vencido = CRITICAL; treinamento vence em até 30
+// dias (mesma janela de CA_EXPIRING_SOON_WINDOW_DAYS — mesmo conceito de
+// "reciclagem") = WARNING. `TrainingParticipant.expiresAt` já é calculado
+// desde a Sprint 2 (ver lib/training-participants.ts:buildParticipantUpdateData),
+// só nunca tinha sido lido por nada até agora. Só conta inscrição ENROLLED
+// (CANCELLED nunca é actionable, ver Sprint SST 1.4G) e colaborador ACTIVE
+// (mesmo raciocínio de custódia/estoque: alerta é sempre sobre algo que
+// alguém pode agir agora).
+export async function getTrainingExpiryAlerts(companyId: string, now: Date): Promise<Alert[]> {
+  const soonThreshold = new Date(now.getTime() + CA_EXPIRING_SOON_WINDOW_DAYS * DAY_MS);
+
+  const participants = await prisma.trainingParticipant.findMany({
+    where: {
+      companyId,
+      enrollmentStatus: "ENROLLED",
+      expiresAt: { not: null, lte: soonThreshold },
+      employee: { status: "ACTIVE" },
+    },
+    include: {
+      employee: { select: { name: true } },
+      trainingClass: { select: { title: true, companyTraining: { select: { title: true } } } },
+    },
+    orderBy: { expiresAt: "asc" },
+    take: 500,
+  });
+
+  return participants.map((participant) => {
+    const isExpired = participant.expiresAt!.getTime() < now.getTime();
+    return {
+      id: `training-${participant.id}`,
+      type: isExpired ? ("TRAINING_EXPIRED" as const) : ("TRAINING_EXPIRING_SOON" as const),
+      severity: isExpired ? ("CRITICAL" as const) : ("WARNING" as const),
+      title: isExpired
+        ? `Treinamento vencido: ${participant.employee.name}`
+        : `Treinamento vence em breve: ${participant.employee.name}`,
+      description: `${participant.trainingClass.companyTraining.title} (turma "${participant.trainingClass.title}") — validade ${formatDateOnlyBR(participant.expiresAt)}.`,
+      resourceType: "TRAINING" as const,
+      resourceId: participant.id,
+      detectedAt: now.toISOString(),
+    };
+  });
+}
+
 const SEVERITY_ORDER: Record<AlertSeverity, number> = { CRITICAL: 0, WARNING: 1, INFO: 2 };
 
 export type AlertFilters = {
@@ -139,13 +188,14 @@ export type AlertFilters = {
 
 export async function getAlerts(companyId: string, filters: AlertFilters = {}) {
   const now = new Date();
-  const [caAlerts, custodyAlerts, stockAlerts] = await Promise.all([
+  const [caAlerts, custodyAlerts, stockAlerts, trainingAlerts] = await Promise.all([
     getCaAlerts(companyId, now),
     getCustodyOverdueAlerts(companyId, now),
     getLowStockAlerts(companyId, now),
+    getTrainingExpiryAlerts(companyId, now),
   ]);
 
-  const allAlerts = [...caAlerts, ...custodyAlerts, ...stockAlerts].sort(
+  const allAlerts = [...caAlerts, ...custodyAlerts, ...stockAlerts, ...trainingAlerts].sort(
     (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity],
   );
 

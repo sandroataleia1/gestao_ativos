@@ -4,10 +4,13 @@ import {
   assignSystemRole,
   cleanupFixtures,
   createTestCompanyWithRoles,
+  createTestCompanyTraining,
+  createTestTrainingClass,
+  createTestEmployee,
   createTestUser,
   prisma,
 } from "@/tests/helpers/db";
-import { getLowStockAlerts } from "@/lib/alerts";
+import { getLowStockAlerts, getTrainingExpiryAlerts } from "@/lib/alerts";
 import { provisionDefaultAssetStatusesAndConditions } from "@/lib/asset-lookup-provisioning";
 import { provisionDefaultStockSetup } from "@/lib/stock-setup-provisioning";
 import { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS, SYSTEM_ROLES } from "@/lib/permissions";
@@ -105,5 +108,141 @@ describe("Sprint Demo Comercial SST 1.2, caso 10 — reorganização visual não
     expect(keys).not.toContain(PERMISSIONS.ASSET_MANAGE);
     expect(keys).not.toContain(PERMISSIONS.EMPLOYEE_MANAGE);
     expect(keys).toContain(PERMISSIONS.ASSET_VIEW);
+  });
+});
+
+// =============================================================================
+// Sprint SST 1.4H (fatia 1) — alertas de vencimento de treinamento.
+// TrainingParticipant.expiresAt já era calculado desde a Sprint 2, mas
+// nenhum alerta o lia até esta entrega. Mesmo padrão de isolamento e de
+// regras (vencido = CRITICAL, a vencer em até 30 dias = WARNING) que os
+// outros 3 tipos de alerta já têm.
+// =============================================================================
+
+async function makeParticipantWithExpiry(
+  companyId: string,
+  label: string,
+  expiresAt: Date,
+  overrides: Partial<{ enrollmentStatus: "ENROLLED" | "CANCELLED"; employeeStatus: "ACTIVE" | "INACTIVE" }> = {},
+) {
+  const employee = await createTestEmployee(companyId, label);
+  if (overrides.employeeStatus === "INACTIVE") {
+    await prisma.employee.update({ where: { id: employee.id }, data: { status: "INACTIVE" } });
+  }
+  const companyTraining = await createTestCompanyTraining(companyId, undefined, label);
+  const trainingClass = await createTestTrainingClass(companyId, companyTraining.id, undefined, label);
+  const participant = await prisma.trainingParticipant.create({
+    data: {
+      companyId,
+      trainingClassId: trainingClass.id,
+      employeeId: employee.id,
+      enrollmentStatus: overrides.enrollmentStatus ?? "ENROLLED",
+      resultStatus: "APPROVED",
+      expiresAt,
+      ...(overrides.enrollmentStatus === "CANCELLED" ? { cancelledAt: new Date() } : {}),
+    },
+  });
+  return { employee, trainingClass, participant };
+}
+
+describe("Sprint SST 1.4H (fatia 1) — alertas de vencimento de treinamento", () => {
+  it("treinamento vencido gera alerta CRITICAL/TRAINING_EXPIRED", async () => {
+    const now = new Date();
+    const company = await createTestCompanyWithRoles("training-alert-expired");
+    companyIds.push(company.id);
+    const { participant } = await makeParticipantWithExpiry(
+      company.id,
+      "expired",
+      new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000),
+    );
+
+    const alerts = await getTrainingExpiryAlerts(company.id, now);
+
+    const found = alerts.find((alert) => alert.resourceId === participant.id);
+    expect(found).toBeTruthy();
+    expect(found?.type).toBe("TRAINING_EXPIRED");
+    expect(found?.severity).toBe("CRITICAL");
+  });
+
+  it("treinamento vencendo em 15 dias gera alerta WARNING/TRAINING_EXPIRING_SOON", async () => {
+    const now = new Date();
+    const company = await createTestCompanyWithRoles("training-alert-soon");
+    companyIds.push(company.id);
+    const { participant } = await makeParticipantWithExpiry(
+      company.id,
+      "soon",
+      new Date(now.getTime() + 15 * 24 * 60 * 60 * 1000),
+    );
+
+    const alerts = await getTrainingExpiryAlerts(company.id, now);
+
+    const found = alerts.find((alert) => alert.resourceId === participant.id);
+    expect(found).toBeTruthy();
+    expect(found?.type).toBe("TRAINING_EXPIRING_SOON");
+    expect(found?.severity).toBe("WARNING");
+  });
+
+  it("treinamento vencendo em 60 dias (fora da janela de 30) não gera alerta", async () => {
+    const now = new Date();
+    const company = await createTestCompanyWithRoles("training-alert-far");
+    companyIds.push(company.id);
+    const { participant } = await makeParticipantWithExpiry(
+      company.id,
+      "far",
+      new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000),
+    );
+
+    const alerts = await getTrainingExpiryAlerts(company.id, now);
+
+    expect(alerts.some((alert) => alert.resourceId === participant.id)).toBe(false);
+  });
+
+  it("inscrição CANCELLED nunca gera alerta, mesmo vencida", async () => {
+    const now = new Date();
+    const company = await createTestCompanyWithRoles("training-alert-cancelled");
+    companyIds.push(company.id);
+    const { participant } = await makeParticipantWithExpiry(
+      company.id,
+      "cancelled",
+      new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000),
+      { enrollmentStatus: "CANCELLED" },
+    );
+
+    const alerts = await getTrainingExpiryAlerts(company.id, now);
+
+    expect(alerts.some((alert) => alert.resourceId === participant.id)).toBe(false);
+  });
+
+  it("colaborador INACTIVE nunca gera alerta, mesmo com inscrição ENROLLED vencida", async () => {
+    const now = new Date();
+    const company = await createTestCompanyWithRoles("training-alert-inactive-employee");
+    companyIds.push(company.id);
+    const { participant } = await makeParticipantWithExpiry(
+      company.id,
+      "inactive",
+      new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000),
+      { employeeStatus: "INACTIVE" },
+    );
+
+    const alerts = await getTrainingExpiryAlerts(company.id, now);
+
+    expect(alerts.some((alert) => alert.resourceId === participant.id)).toBe(false);
+  });
+
+  it("alerta de treinamento de uma empresa nunca aparece na consulta de outra empresa", async () => {
+    const now = new Date();
+    const companyA = await createTestCompanyWithRoles("training-alert-cross-a");
+    companyIds.push(companyA.id);
+    const companyB = await createTestCompanyWithRoles("training-alert-cross-b");
+    companyIds.push(companyB.id);
+    const { participant: participantA } = await makeParticipantWithExpiry(
+      companyA.id,
+      "cross-a",
+      new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000),
+    );
+
+    const alertsB = await getTrainingExpiryAlerts(companyB.id, now);
+
+    expect(alertsB.some((alert) => alert.resourceId === participantA.id)).toBe(false);
   });
 });

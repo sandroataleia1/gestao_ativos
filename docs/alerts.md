@@ -1,8 +1,9 @@
 # Central de alertas
 
 Alertas de CA (Certificado de Aprovação) vencido/próximo do vencimento,
-devolução de custódia atrasada e estoque abaixo do mínimo — calculados **sob
-demanda**, sem fila e sem envio de e-mail (MVP explícito, ver seção 5).
+devolução de custódia atrasada, estoque abaixo do mínimo e vencimento de
+treinamento (Sprint SST 1.4H, fatia 1) — calculados **sob demanda**, sem
+fila e sem envio de e-mail (MVP explícito, ver seção 5).
 
 ## 1. Por que não existe tabela `Alert`
 
@@ -32,6 +33,8 @@ esses papéis já enxergam, então negar o acesso não protegeria nada de novo.
 | Devolução atrasada há mais de 7 dias | `CRITICAL` | mesma consulta, `diasAtraso > 7` |
 | Estoque abaixo do mínimo (saldo > 0) | `WARNING` | `Asset.minimumStock` vs. saldo total (`getStockRows`) |
 | Estoque zerado | `CRITICAL` | mesma regra, saldo total `<= 0` |
+| Treinamento vencido | `CRITICAL` | `TrainingParticipant.expiresAt` no passado |
+| Treinamento vence em até 30 dias | `WARNING` | mesma fonte, ainda no futuro |
 
 ### Estoque baixo depende de `Asset.minimumStock`
 
@@ -50,13 +53,31 @@ O saldo comparado é o **total do ativo somado em todas as localizações**
 (mesma agregação de `getStockRows`), não por local — `minimumStock` é um
 campo do cadastro mestre do ativo, não por localização.
 
+### Vencimento de treinamento (Sprint SST 1.4H, fatia 1)
+
+`getTrainingExpiryAlerts` (`lib/alerts.ts`) lê `TrainingParticipant.expiresAt`
+— calculado desde a Sprint 2 (`buildParticipantUpdateData`, ver
+`docs/trainings-domain.md` §7) quando um participante é aprovado, mas nunca
+lido por nenhum alerta até esta entrega. Mesma janela de 30 dias de CA
+(mesmo conceito: "precisa reciclar em breve"). Só considera:
+
+- `enrollmentStatus: ENROLLED` — uma inscrição `CANCELLED` (Sprint SST 1.4G)
+  nunca é actionable, mesmo que `expiresAt` esteja no passado.
+- `employee.status: ACTIVE` — colaborador inativo não é alguém que a empresa
+  vai mandar reciclar treinamento agora.
+
+Certificado e lista de presença assinada (os outros dois itens que
+`docs/trainings-domain.md` §10 lista como pendentes) continuam fora de
+escopo desta entrega.
+
 ## 4. API
 
 `GET /api/alerts` — exige `alert:view`, deriva `companyId` da sessão.
 Filtros opcionais via query string: `severity` (`INFO`/`WARNING`/`CRITICAL`)
-e `type` (`CA_EXPIRED`/`CA_EXPIRING_SOON`/`CUSTODY_OVERDUE`/`LOW_STOCK`) —
-valores fora dessa lista são ignorados silenciosamente (mesmo padrão de
-sanitização usado nos filtros de `/api/reports/*`).
+e `type` (`CA_EXPIRED`/`CA_EXPIRING_SOON`/`CUSTODY_OVERDUE`/`LOW_STOCK`/
+`TRAINING_EXPIRED`/`TRAINING_EXPIRING_SOON`) — valores fora dessa lista são
+ignorados silenciosamente (mesmo padrão de sanitização usado nos filtros de
+`/api/reports/*`).
 
 Resposta:
 
@@ -83,9 +104,10 @@ filtrarem `alerts`) — os cards de resumo não mudam conforme o filtro
 aplicado na tabela, só as linhas mudam.
 
 `id` é um identificador sintético (`"ca-<id-da-certificação>"`,
-`"custody-<id-da-custódia>"`, `"stock-<id-do-ativo>"`) — não existe uma
-linha de banco correspondente; serve só para `key` no React e não deve ser
-usado para nenhuma outra consulta.
+`"custody-<id-da-custódia>"`, `"stock-<id-do-ativo>"`,
+`"training-<id-do-participante>"`) — não existe uma linha de banco
+correspondente; serve só para `key` no React e não deve ser usado para
+nenhuma outra consulta.
 
 ## 5. Fora de escopo (deliberado, MVP)
 
