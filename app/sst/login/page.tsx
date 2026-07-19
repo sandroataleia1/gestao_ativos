@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ShieldCheckIcon } from "lucide-react";
 
 import { getCurrentSstUser } from "@/lib/sst-auth";
+import { AuthShell } from "@/components/auth/auth-shell";
+import { SST_AUTH_SHELL_PROPS } from "@/components/auth/sst-auth-shell-props";
 import { SstLoginForm } from "./sst-login-form";
 
 export const metadata: Metadata = {
@@ -20,31 +21,20 @@ export default async function SstLoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-muted/30 p-6">
-      <div className="w-full max-w-sm">
-        <div className="mb-8 flex items-center gap-2 font-heading text-lg font-semibold">
-          <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <ShieldCheckIcon className="size-4" />
-          </span>
-          Portal Consultoria SST
-        </div>
-
-        <div className="mb-6 space-y-1.5">
-          <h1 className="text-2xl font-semibold tracking-tight">Entrar</h1>
-          <p className="text-sm text-muted-foreground">
-            Acesse o acompanhamento de conformidade das empresas que autorizaram sua consultoria.
-          </p>
-        </div>
-
-        <SstLoginForm />
-
-        <p className="mt-6 text-center text-sm text-muted-foreground">
+    <AuthShell
+      {...SST_AUTH_SHELL_PROPS}
+      title="Entrar"
+      description="Acesse o acompanhamento de conformidade das empresas que autorizaram sua consultoria."
+      footer={
+        <>
           Ainda não tem uma conta?{" "}
           <Link href="/sst/register" className="font-medium text-foreground underline underline-offset-4">
             Cadastre sua consultoria
           </Link>
-        </p>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <SstLoginForm />
+    </AuthShell>
   );
 }
