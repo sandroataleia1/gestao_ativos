@@ -94,6 +94,23 @@ export function TrainingsTable({
       {
         accessorKey: "title",
         header: () => headerFor("title", "Título"),
+        // Com ~9 colunas na tabela, um título longo (comum nos treinamentos
+        // legais, ex. "NR-01 - Disposições Gerais e Gerenciamento de Riscos
+        // Ocupacionais") empurra a tabela pra fora da tela lateralmente.
+        // Trunca com "..." e mostra o título completo no hover/foco via
+        // Tooltip, em vez de deixar a coluna crescer livre.
+        cell: ({ row }) => (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="block max-w-[260px] truncate" tabIndex={0}>
+                  {row.original.title}
+                </span>
+              }
+            />
+            <TooltipContent>{row.original.title}</TooltipContent>
+          </Tooltip>
+        ),
       },
       {
         id: "category",

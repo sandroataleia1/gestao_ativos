@@ -8,8 +8,8 @@ import { STOCK_SORT_FIELDS, getStockRowsPage, getStockMovementsPage } from "@/li
 import { getCachedStockSummary } from "@/lib/cache";
 import { parsePageParams, parseSearchParam, parseSortParams, type SearchParamsInput } from "@/lib/pagination";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { StockTable } from "./stock-table";
-import { StockMovementsTable } from "./stock-movements-table";
+import { StockTabs, type StockView } from "./stock-tabs";
+import type { StockMovementRow, StockRow } from "./types";
 
 export const metadata: Metadata = {
   title: "Estoque — Gestão de Ativos",
@@ -45,31 +45,9 @@ export default async function StockPage({
   const movLocationId = resolvedSearchParams.movLocationId as string | undefined;
   const movTypeId = resolvedSearchParams.movTypeId as string | undefined;
 
-  const [
-    { rows: stock, total: stockTotal },
-    { rows: movements, total: movTotal },
-    summary,
-    assets,
-    categories,
-    locations,
-    movementTypes,
-  ] = await Promise.all([
-    getStockRowsPage(companyId, {
-      page: stockPage,
-      pageSize: stockPageSize,
-      search: stockSearch || undefined,
-      sort: stockSort,
-      dir: stockDir,
-      categoryId: stockCategoryId,
-      locationId: stockLocationId,
-    }),
-    getStockMovementsPage(companyId, {
-      page: movPage,
-      pageSize: movPageSize,
-      assetId: movAssetId,
-      locationId: movLocationId,
-      movementTypeId: movTypeId,
-    }),
+  const view: StockView = resolvedSearchParams.view === "history" ? "history" : "balance";
+
+  const [summary, assets, categories, locations, movementTypes] = await Promise.all([
     getCachedStockSummary(companyId),
     prisma.asset.findMany({
       where: { companyId, active: true },
@@ -98,6 +76,37 @@ export default async function StockPage({
       orderBy: { name: "asc" },
     }),
   ]);
+
+  // Só a aba ativa busca suas linhas (mesmo padrão de app/(app)/custodies/page.tsx)
+  // — nunca carrega saldo e histórico ao mesmo tempo se só um está visível.
+  let stock: StockRow[] = [];
+  let stockTotal = 0;
+  let movements: StockMovementRow[] = [];
+  let movTotal = 0;
+
+  if (view === "balance") {
+    const result = await getStockRowsPage(companyId, {
+      page: stockPage,
+      pageSize: stockPageSize,
+      search: stockSearch || undefined,
+      sort: stockSort,
+      dir: stockDir,
+      categoryId: stockCategoryId,
+      locationId: stockLocationId,
+    });
+    stock = result.rows;
+    stockTotal = result.total;
+  } else {
+    const result = await getStockMovementsPage(companyId, {
+      page: movPage,
+      pageSize: movPageSize,
+      assetId: movAssetId,
+      locationId: movLocationId,
+      movementTypeId: movTypeId,
+    });
+    movements = result.rows.map((m) => ({ ...m, executedAt: m.executedAt.toISOString() }));
+    movTotal = result.total;
+  }
 
   const { distinctAssets, distinctLocations, consumableQuantity, individualUnits } = summary;
 
@@ -133,24 +142,20 @@ export default async function StockPage({
         ))}
       </div>
 
-      <StockTable
-        initialStock={stock}
-        total={stockTotal}
-        page={stockPage}
-        pageSize={stockPageSize}
-        sort={stockSort}
-        dir={stockDir}
-        categories={categories}
-        locations={locations}
-        canManage={canManage}
-      />
-
-      <StockMovementsTable
-        initialMovements={movements.map((m) => ({ ...m, executedAt: m.executedAt.toISOString() }))}
-        total={movTotal}
-        page={movPage}
-        pageSize={movPageSize}
+      <StockTabs
+        view={view}
+        stock={stock}
+        stockTotal={stockTotal}
+        stockPage={stockPage}
+        stockPageSize={stockPageSize}
+        stockSort={stockSort}
+        stockDir={stockDir}
+        movements={movements}
+        movTotal={movTotal}
+        movPage={movPage}
+        movPageSize={movPageSize}
         assets={assets}
+        categories={categories}
         locations={locations}
         movementTypes={movementTypes}
         canManage={canManage}

@@ -120,12 +120,9 @@ export function StockMovementsTable({
 
   return (
     <div className="grid gap-4">
-      <div>
-        <h2 className="text-lg font-semibold">Histórico de movimentações</h2>
-        <p className="text-sm text-muted-foreground">
-          Entradas registradas para ativos por quantidade e por série/patrimônio.
-        </p>
-      </div>
+      <p className="text-sm text-muted-foreground">
+        Entradas registradas para ativos por quantidade e por série/patrimônio.
+      </p>
 
       <div className="flex flex-wrap items-center gap-2">
         <Select
