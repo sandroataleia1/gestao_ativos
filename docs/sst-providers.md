@@ -143,9 +143,27 @@ aqui:
   estiver mais `ACTIVE`).
 - ~~Sem dedup entre empresas~~ — resolvido (ver seção 2): a busca agora
   vincula ao `SstProvider` já existente em vez de criar um novo por
-  empresa. Continua sem um fluxo de **auto-cadastro** de consultoria nova
-  (quem entra no sistema pela primeira vez ainda depende do seed/provisão
-  manual — não existe uma tela pública "cadastre sua consultoria").
+  empresa.
+- ~~Sem auto-cadastro de consultoria nova~~ — resolvido: `/sst/register`
+  (`app/api/sst/register/route.ts`, `lib/sst-provider-creation.ts`) permite
+  que a própria consultoria crie sua conta, com CNPJ obrigatório e único
+  (`SstProvider.document`, `@@unique`). **Decisão deliberada, diferente do
+  cadastro de empresa** (`/register`, Sprint SST 1.4C): lá, o cadastro
+  público nunca concede acesso automático — sempre passa por
+  `CompanyClaimRequest` + aprovação de um Super Admin, depois de um
+  incidente de segurança P0 em que o cadastro público concedia ADMIN
+  automaticamente. Aqui, o cadastro concede acesso **imediato** como
+  `OWNER`, sem fila de revisão — escolha explícita do usuário do produto,
+  ciente do precedente oposto. Se esse comportamento vier a ser revisto no
+  futuro (ex.: exigir validação humana antes de uma consultoria operar),
+  não é uma correção de bug — é uma mudança de decisão de produto, e
+  precisa ser tratada como tal (provavelmente exigindo um
+  `registrationStatus` em `SstProvider`, análogo ao `controlStatus` de
+  `Company`, mais uma fila de revisão no Portal Super Admin). A auditoria
+  do cadastro fica em `PlatformAuditLog` (ação `sst_provider.self_registered`),
+  não em `AuditLog` — uma `SstProvider` recém-criada por autocadastro ainda
+  não tem nenhuma `Company` vinculada, e `AuditLog.companyId` é
+  obrigatório.
 - ~~Sem pré-cadastro de empresa pela consultoria~~ — resolvido pela Sprint
   Comercial SST 1.4 (ver `docs/portal-consultoria.md`, seção "Pré-cadastro
   de empresa (Sprint 1.4)"): agora a consultoria também pode iniciar o

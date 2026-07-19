@@ -29,7 +29,14 @@ export type PlatformAuditAction =
   | "platform_admin.access_revoked"
   | "platform_admin.last_admin_revocation_blocked"
   | "platform_admin.unauthorized_access_attempt"
-  | "platform_admin.exposure_diagnostic_executed";
+  | "platform_admin.exposure_diagnostic_executed"
+  // Cadastro público de consultoria (app/sst/register) — mesmo raciocínio
+  // do resto deste módulo: uma SstProvider recém-criada por autocadastro
+  // ainda não tem nenhum vínculo com Company nenhuma, então não existe
+  // `companyId` para gravar em `AuditLog` (obrigatório lá). Distinto de
+  // "sst_provider.create" (lib/audit.ts), que é sempre iniciado por uma
+  // empresa autorizando um prestador que ainda não existia.
+  | "sst_provider.self_registered";
 
 export type PlatformAuditSeverityInput = PlatformAuditSeverity;
 export type PlatformAuditSourceInput = PlatformAuditSource;

@@ -4,16 +4,15 @@ import { redirect } from "next/navigation";
 import { ShieldCheckIcon } from "lucide-react";
 
 import { getCurrentSstUser } from "@/lib/sst-auth";
-import { SstLoginForm } from "./sst-login-form";
+import { SstRegisterForm } from "./sst-register-form";
 
 export const metadata: Metadata = {
-  title: "Entrar — Portal Consultoria SST",
+  title: "Cadastrar consultoria — Portal Consultoria SST",
 };
 
-// Fora do layout protegido de app/sst/layout.tsx (rota irmã, sem
-// requireSstAuthOrDeny) — senão ninguém sem acesso conseguiria sequer ver
-// a tela de login para descobrir que não tem acesso.
-export default async function SstLoginPage() {
+// Fora do layout protegido de app/sst/layout.tsx (rota irmã de
+// app/sst/login), mesmo raciocínio: precisa ser acessível sem sessão.
+export default async function SstRegisterPage() {
   const sstUser = await getCurrentSstUser();
   if (sstUser) {
     redirect("/sst/dashboard");
@@ -30,18 +29,18 @@ export default async function SstLoginPage() {
         </div>
 
         <div className="mb-6 space-y-1.5">
-          <h1 className="text-2xl font-semibold tracking-tight">Entrar</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Cadastrar consultoria</h1>
           <p className="text-sm text-muted-foreground">
-            Acesse o acompanhamento de conformidade das empresas que autorizaram sua consultoria.
+            Crie o acesso da sua consultoria para gerenciar a conformidade das empresas que a autorizarem.
           </p>
         </div>
 
-        <SstLoginForm />
+        <SstRegisterForm />
 
         <p className="mt-6 text-center text-sm text-muted-foreground">
-          Ainda não tem uma conta?{" "}
-          <Link href="/sst/register" className="font-medium text-foreground underline underline-offset-4">
-            Cadastre sua consultoria
+          Já tem uma conta?{" "}
+          <Link href="/sst/login" className="font-medium text-foreground underline underline-offset-4">
+            Entrar
           </Link>
         </p>
       </div>

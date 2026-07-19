@@ -18,6 +18,7 @@ import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 // digital, e a página de definição de senha.
 const RULES: { matches: (pathname: string) => boolean; bucket: string; windowMs: number; max: number }[] = [
   { matches: (p) => p === "/api/register", bucket: "register", windowMs: 60_000, max: 5 },
+  { matches: (p) => p === "/api/sst/register", bucket: "sst-register", windowMs: 60_000, max: 5 },
   {
     matches: (p) => p.startsWith("/api/qr/") || p.startsWith("/q/"),
     bucket: "qr-public",

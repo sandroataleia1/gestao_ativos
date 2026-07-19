@@ -1603,7 +1603,10 @@ enum TrainingManagementMode {
 model SstProvider {
   id        String   @id @default(cuid())
   name      String
-  document  String?
+  // Sprint SST — cadastro público de consultoria (app/sst/register):
+  // unique permite múltiplas linhas com document null (seed/registros
+  // antigos sem CNPJ), mas nunca duas consultorias reais com o mesmo CNPJ.
+  document  String?  @unique
   email     String?
   phone     String?
   active    Boolean  @default(true)
