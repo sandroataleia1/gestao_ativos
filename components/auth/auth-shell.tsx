@@ -112,7 +112,7 @@ export function AuthShell({
       </div>
 
       <div
-        className={`auth-shell-light relative flex w-full flex-col items-center justify-center bg-white p-6 text-foreground lg:w-1/2 ${formAccentClassName}`}
+        className={`relative flex w-full flex-col items-center justify-center bg-white p-6 lg:w-1/2 ${formAccentClassName}`}
       >
         <div className="w-full max-w-sm">
           <div className="mb-8 lg:hidden">

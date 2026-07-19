@@ -6,7 +6,7 @@ import type { ComponentProps } from "react";
 
 // Rotas que devem sempre renderizar no tema claro, independentemente da
 // preferência salva/do sistema (telas públicas de autenticação).
-const FORCED_LIGHT_ROUTES = ["/login", "/register", "/q/"];
+const FORCED_LIGHT_ROUTES = ["/login", "/register", "/q/", "/sst/login", "/sst/register"];
 
 export function ThemeProvider({
   children,

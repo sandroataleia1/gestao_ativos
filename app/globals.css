@@ -117,35 +117,6 @@
   --sidebar-ring: oklch(0.65 0.14 258);
 }
 
-/* Força o painel de formulário do AuthShell (login/register) a sempre
-   parecer o tema claro, mesmo com dark mode ativo no restante do app —
-   redeclara as mesmas variáveis do bloco `:root` acima. Reescrever cada
-   valor aqui (em vez de só a cor de fundo) é necessário porque os
-   componentes shadcn (Input, Button, etc.) leem essas variáveis para
-   texto/borda/placeholder também, não só o fundo — sobrescrever apenas
-   `background` deixaria texto/inputs com as cores do tema escuro sobre um
-   fundo branco fixo, ilegível. */
-.auth-shell-light {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.52 0.13 258);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0.005 258);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0.005 258);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.94 0.02 258);
-  --accent-foreground: oklch(0.35 0.1 258);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.6 0.13 258);
-}
-
 /* Identidade de cor do Portal Consultoria SST — verde-esmeralda em vez do
    azul padrão do Portal Empresa (mesmo tom do header/hero do login SST,
    ver components/auth/sst-auth-shell-props.tsx). Escopado (não mexe em
