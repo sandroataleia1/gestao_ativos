@@ -20,11 +20,11 @@ export function SstNav() {
   const pathname = usePathname();
 
   return (
-    // Mesmas cores da navegação da sidebar do Portal Empresa no tema claro
-    // (components/layout/sidebar.tsx, NavLink) — fundo da topbar agora é o
-    // mesmo azul-escuro, então os links precisam do mesmo tratamento claro/
-    // escuro para continuar legíveis.
-    <nav className="flex items-center gap-1 text-sm font-medium text-blue-100/70 dark:text-muted-foreground">
+    // Fundo da topbar é verde-esmeralda escuro (identidade do Portal SST) —
+    // os links precisam do mesmo tratamento claro/escuro pra continuar
+    // legíveis, mesmo raciocínio de contraste usado na sidebar do Portal
+    // Empresa (components/layout/sidebar.tsx, NavLink).
+    <nav className="flex items-center gap-1 text-sm font-medium text-emerald-100/70 dark:text-muted-foreground">
       {NAV_ITEMS.map((item) => {
         const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
         return (

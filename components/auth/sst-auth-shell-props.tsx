@@ -11,6 +11,10 @@ export const SST_AUTH_SHELL_PROPS = {
   brandLabel: "Portal Consultoria SST",
   brandIcon: ShieldCheckIcon,
   accentClassName: "bg-emerald-950",
+  // Também deixa o botão "Entrar"/"Criar conta" (bg-primary) e o foco dos
+  // campos verdes, em vez do azul padrão do resto do app — ver .sst-theme
+  // em app/globals.css.
+  formAccentClassName: "sst-theme",
   heroTitle: "Acompanhe a conformidade de todas as suas empresas clientes, em um só lugar.",
   features: [
     "Gestão de colaboradores, treinamentos e certificados por empresa",

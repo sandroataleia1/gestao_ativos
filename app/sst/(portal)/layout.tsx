@@ -9,8 +9,9 @@ import { NotificationBell } from "@/components/notifications/notification-bell";
 import { SstNav } from "./sst-nav";
 
 // Mesmo contraste usado em NotificationBell/UserMenu abaixo — texto claro
-// sobre o header azul no tema claro, volta ao padrão neutro no escuro.
-const HEADER_ACTION_CLASSNAME = "text-blue-50 hover:bg-white/10 hover:text-white dark:text-foreground dark:hover:bg-muted";
+// sobre o header verde do Portal SST no tema claro, volta ao padrão neutro
+// no escuro.
+const HEADER_ACTION_CLASSNAME = "text-emerald-50 hover:bg-white/10 hover:text-white dark:text-foreground dark:hover:bg-muted";
 
 const ROLE_LABELS: Record<string, string> = {
   OWNER: "Proprietário",
@@ -32,11 +33,15 @@ export default async function SstLayout({ children }: { children: React.ReactNod
   const { user, sstProviderUser } = await requireSstAuthOrDeny();
 
   return (
-    <div className="flex min-h-screen flex-col">
-      {/* Mesma cor da sidebar do Portal Empresa no tema claro
-          (components/layout/sidebar.tsx) — só no claro: no escuro, volta ao
+    // sst-theme (app/globals.css) troca --primary/--ring/--accent pro
+    // verde-esmeralda do Portal SST em todas as páginas internas (botões,
+    // links, foco) — escopado aqui, não afeta o Portal Empresa.
+    <div className="sst-theme flex min-h-screen flex-col">
+      {/* Verde-esmeralda — mesma identidade do login do Portal SST
+          (components/auth/sst-auth-shell-props.tsx), distinta do azul do
+          Portal Empresa. Só no tema claro: no escuro, volta ao
           bg-card/border-border padrão do resto do portal. */}
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-blue-900 bg-blue-950 px-6 py-3 dark:border-border dark:bg-card">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-900 bg-emerald-950 px-6 py-3 dark:border-border dark:bg-card">
         <div className="flex flex-wrap items-center gap-4 sm:gap-6">
           <Link href="/sst/dashboard" className="flex items-center gap-2">
             <span className="flex size-7 items-center justify-center rounded-lg bg-white/10 text-white dark:bg-primary/10 dark:text-primary">
@@ -46,7 +51,7 @@ export default async function SstLayout({ children }: { children: React.ReactNod
               <span className="block font-heading text-base font-semibold text-zinc-50 dark:text-foreground">
                 {sstProviderUser.provider.name}
               </span>
-              <span className="block text-[11px] font-medium tracking-wide text-blue-100/60 uppercase dark:text-muted-foreground">
+              <span className="block text-[11px] font-medium tracking-wide text-emerald-100/60 uppercase dark:text-muted-foreground">
                 Portal Consultoria
               </span>
             </span>
@@ -56,7 +61,7 @@ export default async function SstLayout({ children }: { children: React.ReactNod
         <div className="flex items-center gap-3">
           <Badge
             variant="outline"
-            className="hidden border-white/25 text-blue-50 sm:inline-flex dark:border-border dark:text-foreground"
+            className="hidden border-white/25 text-emerald-50 sm:inline-flex dark:border-border dark:text-foreground"
           >
             {ROLE_LABELS[sstProviderUser.role] ?? sstProviderUser.role}
           </Badge>
@@ -71,7 +76,7 @@ export default async function SstLayout({ children }: { children: React.ReactNod
             email={user.email}
             signOutRedirectTo="/sst/login"
             triggerClassName={HEADER_ACTION_CLASSNAME}
-            emailClassName="text-blue-100/60 dark:text-muted-foreground"
+            emailClassName="text-emerald-100/60 dark:text-muted-foreground"
           />
         </div>
       </header>

@@ -146,6 +146,33 @@
   --ring: oklch(0.6 0.13 258);
 }
 
+/* Identidade de cor do Portal Consultoria SST — verde-esmeralda em vez do
+   azul padrão do Portal Empresa (mesmo tom do header/hero do login SST,
+   ver components/auth/sst-auth-shell-props.tsx). Escopado (não mexe em
+   :root/.dark globais) e aplicado em dois lugares: no layout autenticado
+   do Portal SST (app/sst/(portal)/layout.tsx, cobre botões/links/foco de
+   todas as páginas internas) e no painel de formulário do AuthShell
+   quando renderizado para /sst/login e /sst/register (via
+   formAccentClassName). Usa as variáveis --color-emerald-* que o Tailwind
+   já expõe globalmente (@import "tailwindcss" no topo deste arquivo) em
+   vez de valores oklch escritos à mão, pra garantir contraste consistente
+   com o resto da paleta padrão do Tailwind. */
+.sst-theme {
+  --primary: var(--color-emerald-700);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: var(--color-emerald-500);
+  --accent: var(--color-emerald-100);
+  --accent-foreground: var(--color-emerald-800);
+}
+
+.dark .sst-theme {
+  --primary: var(--color-emerald-500);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: var(--color-emerald-500);
+  --accent: var(--color-emerald-900);
+  --accent-foreground: var(--color-emerald-200);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

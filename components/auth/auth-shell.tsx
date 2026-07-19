@@ -49,6 +49,7 @@ export function AuthShell({
   heroTitle = "Controle total dos ativos da sua empresa, em um só lugar.",
   features = DEFAULT_FEATURES,
   accentClassName = "bg-blue-950",
+  formAccentClassName = "",
 }: {
   title: string;
   description: string;
@@ -59,6 +60,10 @@ export function AuthShell({
   heroTitle?: string;
   features?: readonly string[];
   accentClassName?: string;
+  /** Classe extra pro painel de formulário (lado direito) — usada pra
+   * escopar a cor de destaque dos botões/links do form (ex.: "sst-theme")
+   * sem afetar o Portal Empresa, que fica no padrão azul. */
+  formAccentClassName?: string;
 }) {
   return (
     <div className="flex min-h-screen">
@@ -106,7 +111,9 @@ export function AuthShell({
         </p>
       </div>
 
-      <div className="auth-shell-light relative flex w-full flex-col items-center justify-center bg-white p-6 lg:w-1/2">
+      <div
+        className={`auth-shell-light relative flex w-full flex-col items-center justify-center bg-white p-6 text-foreground lg:w-1/2 ${formAccentClassName}`}
+      >
         <div className="w-full max-w-sm">
           <div className="mb-8 lg:hidden">
             <Wordmark label={brandLabel} icon={brandIcon} />
