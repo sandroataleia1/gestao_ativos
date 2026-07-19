@@ -8,8 +8,8 @@ import { provisionDefaultStockSetup } from "@/lib/stock-setup-provisioning";
 import { isValidBrazilianMobilePhone, maskBrazilianMobilePhone } from "@/lib/phone-mask";
 import { isValidCnpj } from "@/lib/cnpj";
 import { createCompanyWithCanonicalDocument, findCompanyByCnpj } from "@/lib/company-creation";
-import { createOrReuseClaimRequest } from "@/lib/company-claim-request";
-import { ConflictError } from "@/lib/api-errors";
+import { approveCompanyClaimRequest, createOrReuseClaimRequest } from "@/lib/company-claim-request";
+import { ConflictError, handleApiError } from "@/lib/api-errors";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -38,6 +38,15 @@ function asTrimmedString(value: unknown): string {
 // quando ela está UNCLAIMED (pré-cadastrada por uma consultoria, ainda sem
 // dono real). Empresa CLAIMED/CLAIM_PENDING/DISPUTED nunca é reutilizada —
 // devolve sempre a mesma mensagem genérica, sem revelar qual é o motivo.
+//
+// Decisão de produto (revogação da Contenção P0 da Sprint SST 1.4C): a
+// aprovação manual de CompanyClaimRequest deixou de ser exigida no registro
+// público — a claim criada abaixo é aprovada automaticamente na mesma
+// requisição (mesmo `approveCompanyClaimRequest` usado pelo Super Admin),
+// então quem se cadastra já sai como ADMIN da empresa, sem fila de revisão
+// humana. Isso reintroduz deliberadamente o cenário que a Sprint 1.4C
+// mitigava: só conhecer um CNPJ válido passa a bastar para administrar
+// aquela empresa (nova ou pré-cadastrada por uma consultoria SST).
 export async function POST(request: Request) {
   let body: RegisterBody;
   try {
@@ -111,12 +120,9 @@ export async function POST(request: Request) {
       // contra corrida (duas requisições de registro com o mesmo CNPJ ao
       // mesmo tempo) — ConflictError vira a mesma mensagem segura.
       //
-      // Sprint SST 1.4C, §9 — mesmo um CNPJ ainda inexistente não comprova
-      // representação legal: a Company nasce CLAIM_PENDING (nunca CLAIMED
-      // automaticamente), igual ao caminho de reivindicação de uma empresa
-      // pré-cadastrada. O registro público fica temporariamente sem efeito
-      // prático sem um Super Admin Lite aprovando cada solicitação — essa
-      // limitação é aceita deliberadamente como contenção de segurança.
+      // Company nasce CLAIM_PENDING e vira CLAIMED logo abaixo, quando a
+      // claim é auto-aprovada — nunca CLAIMED diretamente aqui, pra passar
+      // pelo mesmo caminho (e mesma auditoria) de uma reivindicação normal.
       company = await createCompanyWithCanonicalDocument({
         name: companyName,
         cnpj: cnpjInput,
@@ -144,15 +150,9 @@ export async function POST(request: Request) {
 
   let userId: string;
   try {
-    // Sprint SST 1.4C.1, §4 — nunca mais passa `companyId: company.id` aqui:
-    // até a aprovação da CompanyClaimRequest, o usuário não administra
-    // NENHUMA empresa, e `User.companyId` (preferência legada, nunca
-    // autorização) deve refletir isso ficando `null` — nunca apontar
-    // prematuramente para uma Company que o usuário ainda não tem
-    // permissão de acessar. A associação real, enquanto isso, é
-    // `CompanyClaimRequest.requesterUserId` (já criada logo abaixo).
-    // `approveCompanyClaimRequest` é o único lugar que preenche esta
-    // coluna, depois de criar a CompanyMembership de verdade.
+    // `User.companyId` só é preenchido dentro de `approveCompanyClaimRequest`
+    // (chamado logo abaixo), depois que a CompanyMembership real já existe —
+    // nunca passado aqui diretamente.
     const result = await signUpEmailInternal({ name, email, password }, request.headers);
     userId = result.user.id;
   } catch {
@@ -162,17 +162,30 @@ export async function POST(request: Request) {
     );
   }
 
-  // Contenção P0 (Sprint SST 1.4C) — este ponto do código NUNCA cria
-  // CompanyMembership/UserRole diretamente. Só conhecer o CNPJ (empresa
-  // nova ou pré-cadastrada) nunca comprova representação legal; a única
-  // forma de um usuário passar a administrar uma Company é através de uma
-  // CompanyClaimRequest aprovada explicitamente por um humano (futuro Super
-  // Admin Lite) — ver lib/company-claim-request.ts:approveCompanyClaimRequest.
-  await createOrReuseClaimRequest({
-    companyId: company.id,
-    requester: { id: userId, name },
-    origin: isClaim ? "EXISTING_PRE_REGISTRATION" : "SELF_REGISTRATION",
-  });
+  try {
+    // Cria a CompanyClaimRequest e imediatamente a aprova, com o próprio
+    // requerente como reviewer — mesmo caminho de dados/auditoria de uma
+    // aprovação manual (CompanyMembership ACTIVE + papel ADMIN + Company
+    // CLAIMED), só que sem esperar um humano decidir. O log de auditoria
+    // resultante (`company_claim.approved`) mostra reviewer === requester,
+    // o sinal de que foi uma auto-aprovação de registro público, não uma
+    // revisão de fato.
+    const { claim } = await createOrReuseClaimRequest({
+      companyId: company.id,
+      requester: { id: userId, name },
+      origin: isClaim ? "EXISTING_PRE_REGISTRATION" : "SELF_REGISTRATION",
+    });
+    await approveCompanyClaimRequest({
+      claimRequestId: claim.id,
+      reviewer: { id: userId, name },
+    });
+  } catch (error) {
+    // Só alcançável em corrida real (duas pessoas reivindicando o mesmo
+    // pré-cadastro UNCLAIMED ao mesmo tempo — a segunda aprovação esbarra
+    // na Company já CLAIMED pela primeira). A conta já foi criada; devolve
+    // o erro em vez de deixar o usuário achar que tem acesso.
+    return handleApiError(error);
+  }
 
-  return NextResponse.json({ ok: true, status: "CLAIM_REVIEW_REQUIRED" });
+  return NextResponse.json({ ok: true, status: "ACTIVE" });
 }

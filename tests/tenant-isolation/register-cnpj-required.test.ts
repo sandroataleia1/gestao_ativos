@@ -185,7 +185,7 @@ describe("POST /api/register — CNPJ obrigatório (Sprint Comercial SST 1.4)", 
     expect(companiesAfter).toBe(1);
   });
 
-  it("CNPJ de empresa UNCLAIMED com vínculo provisório -> reivindica (200), fica CLAIM_PENDING, nunca duplica a Company", async () => {
+  it("CNPJ de empresa UNCLAIMED com vínculo provisório -> reivindica e auto-aprova (200), fica CLAIMED, nunca duplica a Company", async () => {
     const route = await import("@/app/api/register/route");
     const cnpj = uniqueTestCnpj();
 
@@ -230,32 +230,35 @@ describe("POST /api/register — CNPJ obrigatório (Sprint Comercial SST 1.4)", 
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; status: string };
-    // Sprint SST 1.4C — nunca mais concede acesso automático a partir do
-    // CNPJ; a resposta agora é sempre CLAIM_REVIEW_REQUIRED, e nenhuma
-    // CompanyMembership é criada aqui (só uma CompanyClaimRequest PENDING).
-    expect(body.status).toBe("CLAIM_REVIEW_REQUIRED");
+    // Registro público auto-aprova a claim na mesma requisição — resposta
+    // ACTIVE, e a CompanyMembership já existe.
+    expect(body.status).toBe("ACTIVE");
 
     // Nunca cria uma segunda Company — o usuário é criado sobre a MESMA empresa.
     const companiesWithCnpj = await prisma.company.count({ where: { documentNormalized: cnpj } });
     expect(companiesWithCnpj).toBe(1);
 
     const user = await prisma.user.findUniqueOrThrow({ where: { email } });
-    // Sprint SST 1.4C.1, §4 — User.companyId permanece null até a
-    // aprovação; nunca aponta prematuramente para a empresa reivindicada.
-    expect(user.companyId).toBeNull();
+    expect(user.companyId).toBe(preRegistered.id);
 
-    const membership = await prisma.companyMembership.findUnique({
+    const membership = await prisma.companyMembership.findUniqueOrThrow({
       where: { userId_companyId: { userId: user.id, companyId: preRegistered.id } },
     });
-    expect(membership).toBeNull();
+    expect(membership.status).toBe("ACTIVE");
 
     const claim = await prisma.companyClaimRequest.findUniqueOrThrow({
       where: { companyId_requesterUserId: { companyId: preRegistered.id, requesterUserId: user.id } },
     });
-    expect(claim.status).toBe("PENDING");
+    expect(claim.status).toBe("APPROVED");
     expect(claim.origin).toBe("EXISTING_PRE_REGISTRATION");
 
     const company = await prisma.company.findUniqueOrThrow({ where: { id: preRegistered.id } });
+    // Continua CLAIM_PENDING (não CLAIMED) — não por falta de aprovação da
+    // claim (já está APPROVED acima), mas porque ainda existe um vínculo
+    // provisório da consultoria SST (authorizationBasis
+    // PROVIDER_PRE_REGISTRATION) sem revisão da empresa
+    // (companyReviewedAt: null), checado por approveCompanyClaimRequest
+    // independente de quem administra a Company.
     expect(company.controlStatus).toBe("CLAIM_PENDING");
     expect(company.claimedAt).toBeNull();
     // O nome pré-cadastrado pela consultoria nunca é sobrescrito pelo nome

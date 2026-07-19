@@ -163,19 +163,12 @@ export function RegisterForm() {
       return;
     }
 
-    // Sprint SST 1.4C.1 — desde a Sprint SST 1.4C, /api/register NUNCA mais
-    // concede acesso direto ao Portal Empresa: toda tentativa bem-sucedida
-    // (CNPJ novo, CNPJ de empresa UNCLAIMED pré-cadastrada por uma
-    // consultoria, ou reivindicação concorrente que virou DISPUTED) devolve
-    // sempre `{ ok: true, status: "CLAIM_REVIEW_REQUIRED" }` — a conta foi
-    // criada, mas só uma CompanyClaimRequest PENDING existe, nunca uma
-    // CompanyMembership. Único destino correto é a página de
-    // acompanhamento, nunca /dashboard (que hoje redirecionaria de volta
-    // pra cá de qualquer forma via requireCompanyOrDeny(), mas só depois de
-    // uma navegação a mais e um flash de conteúdo). Nunca depende de CNPJ
-    // na query string nem de um companyId devolvido pelo servidor — a
-    // página de acompanhamento resolve tudo a partir da sessão do usuário
-    // autenticado (ver app/company-claim/pending/page.tsx).
+    // /api/register cria a conta e já auto-aprova a CompanyClaimRequest na
+    // mesma requisição (ver app/api/register/route.ts) — toda tentativa
+    // bem-sucedida devolve `{ ok: true, status: "ACTIVE" }` e o destino é
+    // direto /dashboard, via resolveRegisterSuccessOutcome. Nunca depende de
+    // CNPJ na query string nem de um companyId devolvido pelo servidor — o
+    // redirecionamento é resolvido só a partir do `status` da resposta.
     const data = (await response.json().catch(() => null)) as RegisterSuccessBody;
     const outcome = resolveRegisterSuccessOutcome(data);
     setRedirectMessage(outcome.message);

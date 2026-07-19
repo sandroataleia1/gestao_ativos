@@ -10,22 +10,18 @@ function uniqueTestCnpj(): string {
   return withValidCheckDigits(Date.now().toString().slice(-12).padStart(12, "0"));
 }
 
-// Sprint SST 1.4C — este arquivo cobria antes a regressão inversa (Sprint
-// 0.6: garantir que o registro CRIASSE uma CompanyMembership ACTIVE). Essa
-// premissa virou exatamente a vulnerabilidade corrigida nesta sprint: só
-// conhecer um CNPJ válido não pode mais conceder acesso administrativo
-// imediato. Reescrito para provar o oposto — registro NUNCA cria
-// CompanyMembership/papel ADMIN diretamente; cria só uma CompanyClaimRequest
-// PENDING, e o usuário recém-registrado fica corretamente bloqueado do
-// Portal Empresa até uma aprovação explícita (ver
-// lib/company-claim-request.ts:approveCompanyClaimRequest).
+// A Sprint SST 1.4C introduziu a Contenção P0 (registro nunca concede
+// acesso automático a partir de um CNPJ) descrita no histórico deste
+// arquivo até então. Decisão de produto posterior revogou essa contenção
+// deliberadamente: /api/register agora cria a CompanyClaimRequest e já a
+// aprova na mesma requisição (mesmo `approveCompanyClaimRequest` usado por
+// um Super Admin), sem fila de revisão humana. Este teste passou a provar o
+// comportamento atual — reintroduzir uma trava aqui não é um bug a
+// corrigir, é a política vigente.
 //
 // Este teste NÃO mocka @/lib/auth (precisa do fluxo real de signUpEmail do
 // Better Auth) — por isso fica isolado num arquivo próprio, sem o
-// `vi.mock("@/lib/auth", ...)` usado nos demais arquivos desta suíte. Por
-// não mockar @/lib/auth, também não mocka next/headers/cookies — por isso
-// chama requireCompany() sem passar por um Route Handler real (o teste do
-// bloqueio em si é feito diretamente contra o resolver).
+// `vi.mock("@/lib/auth", ...)` usado nos demais arquivos desta suíte.
 
 const createdCompanyIds: string[] = [];
 const createdUserEmails: string[] = [];
@@ -55,8 +51,8 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-describe("Sprint SST 1.4C — registro nunca concede acesso automático a partir do CNPJ", () => {
-  it("admin recém-registrado NÃO tem CompanyMembership nem papel ADMIN; tem só uma CompanyClaimRequest PENDING", async () => {
+describe("registro público auto-aprova a claim (sem fila de revisão humana)", () => {
+  it("admin recém-registrado já tem CompanyMembership ACTIVE e papel ADMIN; a claim nasce APPROVED", async () => {
     const route = await import("@/app/api/register/route");
 
     const email = `__tenant_test__register-${Date.now()}@example.test`;
@@ -77,39 +73,34 @@ describe("Sprint SST 1.4C — registro nunca concede acesso automático a partir
     const res = await route.POST(req);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; status: string };
-    expect(body.status).toBe("CLAIM_REVIEW_REQUIRED");
+    expect(body.status).toBe("ACTIVE");
 
     const user = await prisma.user.findUniqueOrThrow({ where: { email } });
 
-    // Sprint SST 1.4C.1, §4 — User.companyId permanece null: a única
-    // associação real é CompanyClaimRequest.requesterUserId, nunca a
-    // preferência legada.
-    expect(user.companyId).toBeNull();
-
-    // Cria exatamente uma CompanyClaimRequest PENDING para este usuário —
-    // é através dela (nunca de user.companyId) que a empresa é encontrada.
     const claim = await prisma.companyClaimRequest.findFirstOrThrow({
       where: { requesterUserId: user.id },
     });
     createdCompanyIds.push(claim.companyId);
-    expect(claim.status).toBe("PENDING");
+    expect(claim.status).toBe("APPROVED");
     expect(claim.origin).toBe("SELF_REGISTRATION");
+    expect(claim.reviewedByUserId).toBe(user.id); // auto-aprovado pelo próprio requerente
 
-    // Nunca cria CompanyMembership diretamente.
-    const membership = await prisma.companyMembership.findUnique({
+    // `User.companyId` já aponta pra empresa, preenchido dentro de
+    // approveCompanyClaimRequest depois de criar a membership real.
+    expect(user.companyId).toBe(claim.companyId);
+
+    const membership = await prisma.companyMembership.findUniqueOrThrow({
       where: { userId_companyId: { userId: user.id, companyId: claim.companyId } },
     });
-    expect(membership).toBeNull();
+    expect(membership.status).toBe("ACTIVE");
 
-    // Nunca atribui papel ADMIN diretamente.
     const userRole = await prisma.userRole.findFirst({
       where: { userId: user.id, companyId: claim.companyId, role: { name: "ADMIN" } },
     });
-    expect(userRole).toBeNull();
+    expect(userRole).not.toBeNull();
 
-    // Company nasce CLAIM_PENDING (nunca CLAIMED automaticamente) — §9.
     const company = await prisma.company.findUniqueOrThrow({ where: { id: claim.companyId } });
-    expect(company.controlStatus).toBe("CLAIM_PENDING");
-    expect(company.claimedAt).toBeNull();
+    expect(company.controlStatus).toBe("CLAIMED");
+    expect(company.claimedAt).not.toBeNull();
   });
 });
