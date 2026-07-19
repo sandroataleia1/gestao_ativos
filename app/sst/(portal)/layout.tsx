@@ -4,8 +4,13 @@ import { ShieldCheckIcon } from "lucide-react";
 import { requireSstAuthOrDeny } from "@/lib/sst-auth";
 import { Badge } from "@/components/ui/badge";
 import { UserMenu } from "@/components/layout/user-menu";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { NotificationBell } from "@/components/notifications/notification-bell";
 import { SstNav } from "./sst-nav";
+
+// Mesmo contraste usado em NotificationBell/UserMenu abaixo — texto claro
+// sobre o header azul no tema claro, volta ao padrão neutro no escuro.
+const HEADER_ACTION_CLASSNAME = "text-blue-50 hover:bg-white/10 hover:text-white dark:text-foreground dark:hover:bg-muted";
 
 const ROLE_LABELS: Record<string, string> = {
   OWNER: "Proprietário",
@@ -58,13 +63,14 @@ export default async function SstLayout({ children }: { children: React.ReactNod
           <NotificationBell
             apiBase="/api/sst/notifications"
             historyHref="/sst/notifications"
-            triggerClassName="text-blue-50 hover:bg-white/10 hover:text-white dark:text-foreground dark:hover:bg-muted"
+            triggerClassName={HEADER_ACTION_CLASSNAME}
           />
+          <ThemeToggle triggerClassName={HEADER_ACTION_CLASSNAME} />
           <UserMenu
             name={user.name}
             email={user.email}
             signOutRedirectTo="/sst/login"
-            triggerClassName="text-blue-50 hover:bg-white/10 hover:text-white dark:text-foreground dark:hover:bg-muted"
+            triggerClassName={HEADER_ACTION_CLASSNAME}
             emailClassName="text-blue-100/60 dark:text-muted-foreground"
           />
         </div>

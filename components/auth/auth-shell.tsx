@@ -106,7 +106,7 @@ export function AuthShell({
         </p>
       </div>
 
-      <div className="relative flex w-full flex-col items-center justify-center bg-background p-6 lg:w-1/2">
+      <div className="auth-shell-light relative flex w-full flex-col items-center justify-center bg-white p-6 lg:w-1/2">
         <div className="w-full max-w-sm">
           <div className="mb-8 lg:hidden">
             <Wordmark label={brandLabel} icon={brandIcon} />

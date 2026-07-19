@@ -18,7 +18,7 @@ const OPTIONS = [
   { value: "system", label: "Sistema", icon: MonitorIcon },
 ] as const;
 
-export function ThemeToggle() {
+export function ThemeToggle({ triggerClassName }: { triggerClassName?: string }) {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
@@ -29,7 +29,12 @@ export function ThemeToggle() {
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
-          <Button variant="ghost" size="icon-sm" aria-label="Alternar tema">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Alternar tema"
+            className={triggerClassName}
+          >
             {mounted && theme === "dark" ? (
               <MoonIcon className="size-4" />
             ) : (
